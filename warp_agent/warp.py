@@ -236,6 +236,13 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def match_name(candidates, name: str, cutoff: float = 0.85) -> str | None:
+    """Best fuzzy match for a name read by text recognition, which can drop or swap a character."""
+    import difflib
+    found = difflib.get_close_matches(normalize(name), list(candidates), n=1, cutoff=cutoff)
+    return found[0] if found else None
+
+
 def sidebar_groups(lines: list[dict], scale: float = 1.0) -> dict[str, list[str]]:
     """Read tab groups from the vertical tabs sidebar of a screenshot.
 

@@ -21,7 +21,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from warp_agent import state
+from warp_agent import state, warp
 
 BIN = str(Path(__file__).resolve().parent.parent / "bin" / "warp-agent")
 LIVE = os.environ.get("WARP_AGENT_LIVE") == "1"
@@ -134,8 +134,14 @@ class LiveWarpTest(unittest.TestCase):
         return result.stdout
 
     def sidebar(self, session_id):
+        """Tab groups read from a screenshot, keyed by this run's group names where they match."""
         groups = json.loads(wa("shot", session_id).stdout)["groups"]
-        return {g: [m for m in members if not m.endswith("main")] for g, members in groups.items()}
+        result = {}
+        for read_name, members in groups.items():
+            name = warp.match_name([self.group_a, self.group_b], read_name) or read_name
+            result[name] = [warp.match_name(self.sessions.values(), m) or m
+                            for m in members if not m.endswith("main")]
+        return result
 
     def test_1_claude_in_new_group_fixes_bug(self):
         sid = self.launch("fix", "--window", "--group", self.group_a, "--dir", str(self.stats),
