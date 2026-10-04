@@ -76,6 +76,7 @@ def create_session(args, prompt: str, group: str | None, tab_title: str | None =
         "tab_title": tab_title or session_id,
         "permissions": "ask" if args.ask_permissions else "bypass",
         "model": args.model,
+        "agent_args": shlex.split(args.agent_args or ""),
         "fork": _fork_source(args),
         "notify": not args.no_notify,
         "created_at": time.time(),
@@ -122,6 +123,7 @@ def agent_argv(session: state.Session) -> list[str]:
         argv += ["--dangerously-bypass-approvals-and-sandbox"] if bypass else ["-a", "on-request", "-s", "read-only"]
         if meta.get("model"):
             argv += ["-m", meta["model"]]
+    argv += meta.get("agent_args") or []
     if prompt.strip():
         argv += ["--", prompt] if meta["agent"] == "claude" else [prompt]
     return argv
@@ -204,7 +206,8 @@ def cmd_panes(args) -> int:
     for task in tasks:
         task_args = argparse.Namespace(**{**vars(args), "agent": task.get("agent", args.agent),
                                           "dir": task.get("dir", args.dir), "name": task.get("name"),
-                                          "model": task.get("model", args.model), "fork": None})
+                                          "model": task.get("model", args.model), "fork": None,
+                                          "agent_args": task.get("agent_args", args.agent_args)})
         sessions.append(create_session(task_args, task["prompt"], args.group, title))
     panes = [{"directory": s.meta["dir"], "command": run_command(s, args.keep_pane)} for s in sessions]
     place_tab(warp.TAB_CONFIG_PREFIX + title, panes, title, args.group, args.window, sessions[0],
@@ -429,6 +432,9 @@ def cmd_shot(args) -> int:
     """Screenshot the Warp window showing a session and report the sidebar's groups."""
     session = state.resolve(args.id)
     out = Path(args.out or session.dir / "screenshot.png")
+    if not args.window and session.alive():
+        # A window's title is its active tab's title, so bring the session's tab forward.
+        warp.focus(session.pane["focus_url"], session.meta["tab_title"])
     scale = warp.screenshot(args.window or session.meta["tab_title"], out)
     groups = warp.sidebar_groups(warp.recognize_text(out), scale)
     print(json.dumps({"screenshot": str(out), "groups": groups}, indent=2))
@@ -443,6 +449,8 @@ def _launch_options(parser):
     parser.add_argument("--group", help="Warp tab group to open in; created if missing")
     parser.add_argument("--window", action="store_true", help="open in a new Warp window")
     parser.add_argument("--model", help="model override (default: the agent's default)")
+    parser.add_argument("--agent-args", metavar="ARGS",
+                        help='extra flags for the agent, e.g. "--profile cli -c model_reasoning_effort=high"')
     parser.add_argument("--ask-permissions", action="store_true",
                         help="let the agent ask before acting (default: bypass approvals)")
     parser.add_argument("--keep-pane", action="store_true",

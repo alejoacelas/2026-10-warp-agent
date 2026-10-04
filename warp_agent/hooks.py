@@ -24,6 +24,7 @@ CODEX_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
                 "PermissionRequest", "Stop"]
 WAITING_TOOLS = {"AskUserQuestion", "request_user_input"}
 EVENT_LOG_FIELD_LIMIT = 2000
+IDLE_STATES = {"done", "idle", "ended", "starting"}
 
 
 def hook_command(agent: str) -> str:
@@ -119,6 +120,10 @@ def handle(agent: str, stdin_text: str) -> None:
     if fields is None:
         return
     before = state.read_json(directory / "status.json", {}).get("state")
+    if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure") and before in IDLE_STATES:
+        # Tool calls outside a turn (e.g. Claude cancelling a scheduled wakeup after
+        # Stop) are housekeeping; a new turn always starts with UserPromptSubmit.
+        return
     status = state.update_status(session_id, last_event=event, **fields)
     if status.get("state") in ("done", "waiting") and status["state"] != before:
         notify(session_id, status)
