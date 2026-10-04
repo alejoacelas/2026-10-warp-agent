@@ -52,7 +52,8 @@ SERVER = textwrap.dedent("""
     from warp_agent import ptywrap
     root = Path(sys.argv[2])
     code = ptywrap.serve([sys.executable, str(root / "child.py"), str(root / "started")],
-                         root / "inbox", root / "output.log", root / "sock", winsize=(30, 100))
+                         root / "inbox", root / "output.log", root / "sock", winsize=(30, 100),
+                         idle_limit=float(sys.argv[3]), is_busy=lambda: (root / "busy").exists())
     (root / "exit").write_text(str(code))
 """)
 
@@ -116,11 +117,14 @@ class Client:
 
 
 class ServerTest(unittest.TestCase):
+    idle_limit = 0  # seconds; subclasses turn the idle cleanup on
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         (self.root / "child.py").write_text(CHILD)
-        self.server = subprocess.Popen([sys.executable, "-c", SERVER, str(REPO), str(self.root)],
+        self.server = subprocess.Popen([sys.executable, "-c", SERVER, str(REPO), str(self.root),
+                                        str(self.idle_limit)],
                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                        stderr=subprocess.DEVNULL, start_new_session=True,
                                        env={**os.environ, "WARP_AGENT_CLOSE_GRACE": str(GRACE)})
@@ -244,6 +248,49 @@ class ServerTest(unittest.TestCase):
         self.assertIsNone(self.server.poll())
         viewer.send(b"D", b"q")
         self.assertTrue(viewer.closed())
+
+
+class IdleCleanupTest(ServerTest):
+    """Agents left with no viewer and no turn running are stopped after the idle limit."""
+
+    idle_limit = 1.0
+
+    def detach_first_viewer(self):
+        viewer = Client(self.root / "sock")
+        viewer.read_until(b"size")
+        ptywrap.send(self.root / "inbox", {"detach": True})
+        self.assertTrue(viewer.closed())
+
+    def test_an_idle_agent_with_no_viewer_is_stopped(self):
+        self.detach_first_viewer()
+        self.assertEqual(self.server.wait(timeout=self.idle_limit + 5), 0)
+        self.assertEqual((self.root / "exit").read_text(), "-15")
+
+    def test_a_busy_agent_is_kept_until_its_turn_ends(self):
+        (self.root / "busy").touch()
+        self.detach_first_viewer()
+        time.sleep(self.idle_limit * 3)
+        self.assertIsNone(self.server.poll())
+        (self.root / "busy").unlink()
+        self.assertEqual(self.server.wait(timeout=self.idle_limit + 5), 0)
+
+    def test_an_idle_agent_shown_in_a_viewer_is_kept(self):
+        viewer = Client(self.root / "sock")
+        viewer.read_until(b"size")
+        time.sleep(self.idle_limit * 3)
+        self.assertIsNone(self.server.poll())
+        viewer.send(b"D", b"q")
+        self.assertTrue(viewer.closed())
+
+    # The inherited ServerTest cases run with idle cleanup off.
+    test_agent_starts_only_after_the_first_viewer = None
+    test_input_inbox_and_exit_reach_the_right_places = None
+    test_closing_the_pane_while_warp_runs_ends_the_agent = None
+    test_a_viewer_killed_outright_while_warp_runs_ends_the_agent = None
+    test_detach_keeps_the_agent_even_while_warp_runs = None
+    test_quitting_warp_leaves_the_agent_running = None
+    test_reattaching_within_the_grace_period_keeps_the_agent = None
+
 
 if __name__ == "__main__":
     unittest.main()

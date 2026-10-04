@@ -29,8 +29,11 @@ Agents run in the background and survive quitting Warp. After reopening Warp,
 in a new tab in its group. Closing a session's pane (Cmd+W) ends its agent once
 Warp's 60-second undo window passes. `warp-agent detach <id>` leaves an agent
 running without a pane; `warp-agent view <id>` shows it in any terminal.
-`warp-agent prune` lists the folders of sessions that ended over a week ago, and
-deletes them with `--yes`.
+An agent with no pane and no turn running is stopped after 2 hours
+(`--idle-hours H` per launch or `WARP_AGENT_IDLE_HOURS`; `0` never). Restarting or
+logging out of the Mac ends all agents; their conversations resume with
+`claude --resume <id>` or `codex resume <id>`. `warp-agent prune` lists the folders
+of sessions that ended over a week ago, and deletes them with `--yes`.
 
 - `--agent codex` runs Codex instead of Claude Code.
 - `--window` opens a new Warp window; `--split <id>` opens beside another session.

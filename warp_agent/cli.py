@@ -18,6 +18,8 @@ from . import hooks, ptywrap, state, transcripts, warp
 
 BIN = Path(__file__).resolve().parent.parent / "bin" / "warp-agent"
 ATTACH_TIMEOUT = 20.0
+# Agents with no pane that are not mid-turn are stopped after this many hours (0: never).
+DEFAULT_IDLE_HOURS = float(os.environ.get("WARP_AGENT_IDLE_HOURS", "2"))
 RETURNABLE = {"done", "waiting", "failed", "ended"}
 
 
@@ -81,6 +83,7 @@ def create_session(args, prompt: str, group: str | None, tab_title: str | None =
         "agent_args": shlex.split(args.agent_args or ""),
         "fork": _fork_source(args),
         "notify": not args.no_notify,
+        "idle_hours": args.idle_hours if args.idle_hours is not None else DEFAULT_IDLE_HOURS,
         "created_at": time.time(),
     }
     if args.agent == "claude":
@@ -347,6 +350,15 @@ def cmd_serve(args) -> int:
         proc["ended_by"] = "pane closed in Warp"
         save()
 
+    hours = session.meta.get("idle_hours", DEFAULT_IDLE_HOURS)
+
+    def on_idle_stop():
+        proc["ended_by"] = f"idle with no pane for {hours:g} h"
+        save()
+
+    def is_busy():
+        return session.status.get("state") == "working"
+
     def on_exit(code):
         proc.update(exit_code=code, ended_at=time.time(), viewer=False)
         save()
@@ -357,7 +369,8 @@ def cmd_serve(args) -> int:
     return ptywrap.serve(agent_argv(session), session.dir / "inbox", session.dir / "output.log",
                          session.dir / "sock", on_start=on_start, on_exit=on_exit,
                          on_output=TrustPromptWatcher(session), on_viewer=on_viewer,
-                         on_pane_closed=on_pane_closed,
+                         on_pane_closed=on_pane_closed, idle_limit=hours * 3600,
+                         is_busy=is_busy, on_idle_stop=on_idle_stop,
                          winsize=(args.rows, args.cols))
 
 
@@ -615,6 +628,9 @@ def _launch_options(parser):
     parser.add_argument("--keep-pane", action="store_true",
                         help="keep the pane open after the agent exits")
     parser.add_argument("--no-notify", action="store_true")
+    parser.add_argument("--idle-hours", type=float, metavar="H",
+                        help="stop the agent after H hours with no pane and no turn running "
+                             "(default: $WARP_AGENT_IDLE_HOURS or 2; 0 never)")
     parser.add_argument("--json", action="store_true")
 
 

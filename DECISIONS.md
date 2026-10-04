@@ -13,6 +13,7 @@
 - [A PTY wrapper carries follow-up messages and answers trust prompts](#pty-wrapper).
 - [Agents run under a background server and survive quitting Warp](#background-server).
 - [Closing a pane ends its agent; quitting Warp does not](#close-versus-quit).
+- [Agents left with no pane are stopped after 2 idle hours](#idle-cleanup).
 
 ### Keep both apps working
 - [`supervise-workers` keeps an Orca track and adds a Warp track](#two-tracks).
@@ -72,6 +73,12 @@ viewer, and Warp does not reliably hang it up, so the viewer reports its Warp
 process when it connects and the server checks, 5 s after any viewer loss it did
 not cause, whether that Warp is still running. `detach` is the deliberate way to
 leave an agent running without a pane.
+
+### Idle cleanup
+Asked for on 2026-10-04 as a strict default: background agents otherwise run until
+the Mac restarts. The server stops an agent after 2 hours with no viewer and no
+turn running (hook state not `working`); a long turn finishes first. Agents shown in
+a pane are never stopped this way, since closing the pane already ends them.
 
 ### Two tracks
 The user runs agents in both Orca and Warp; the skill chooses by environment.

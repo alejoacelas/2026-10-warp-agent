@@ -25,6 +25,10 @@ the agent keeps running for `warp-agent restore`. This does not depend on how th
 viewer died: Warp may hang it up, end it, or close its terminal. Viewers outside
 Warp only detach.
 
+An agent with no viewer that is not mid-turn is stopped once it has stayed that
+way for `idle_limit` seconds, so agents left behind after quitting Warp do not
+run until the next restart.
+
 Viewer-to-server frames: one type byte, a 4-byte big-endian length, the payload.
 "D" carries input bytes; "W" carries the window size as two 16-bit integers
 (rows, columns); "A" carries the Warp app's process ID as a 32-bit integer.
@@ -185,7 +189,8 @@ def _frame(kind: bytes, payload: bytes) -> bytes:
 
 def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None = None,
           on_start=None, on_exit=None, on_output=None, on_viewer=None, on_pane_closed=None,
-          winsize: tuple[int, int] | None = None) -> int:
+          winsize: tuple[int, int] | None = None, idle_limit: float = 0, is_busy=None,
+          on_idle_stop=None) -> int:
     """Run argv under a PTY until it exits; return its exit code.
 
     With `socket_path`, wait for the first viewer before starting the agent (so
@@ -239,6 +244,8 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
     inbox_buffer = b""
     close_check: tuple[float, int] | None = None  # (deadline, Warp app pid) after a viewer vanished
     viewer_app_pid: int | None = None
+    unattended_since: float | None = None  # when the agent last had a viewer or was busy
+    idle_check_every = min(60.0, idle_limit / 4) if idle_limit else None
 
     def drop_viewer(reason: str):
         """Disconnect the viewer; one that vanished on its own may mean its pane closed."""
@@ -279,6 +286,8 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
                 watched.append(viewer)
             deadlines = [t for t, _ in pending] + ([close_check[0]] if close_check else [])
             timeout = max(0.0, min(deadlines) - time.monotonic()) if deadlines else None
+            if idle_check_every:
+                timeout = idle_check_every if timeout is None else min(timeout, idle_check_every)
             try:
                 ready, _, _ = select.select(watched, [], [], timeout)
             except InterruptedError:
@@ -287,6 +296,18 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
             for item in [item for item in pending if item[0] <= now]:
                 pending.remove(item)
                 os.write(master, item[1])
+            if idle_limit:
+                if viewer is not None or (is_busy and is_busy()):
+                    unattended_since = None
+                elif unattended_since is None:
+                    unattended_since = now
+                elif now - unattended_since >= idle_limit:
+                    print(f"{time.ctime()}: idle with no viewer for {idle_limit:g}s; stopping",
+                          file=sys.stderr, flush=True)
+                    unattended_since = None
+                    if on_idle_stop:
+                        on_idle_stop()
+                    os.kill(pid, signal.SIGTERM)
             if close_check and close_check[0] <= now:
                 app_pid = close_check[1]
                 close_check = None

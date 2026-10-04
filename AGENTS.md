@@ -57,7 +57,9 @@ Source references are to `reference/warp`.
 - Closing a pane (Cmd+W, then "Yes, close") keeps it for 60 s so Cmd+Shift+T can
   reopen it (`general.undo_close.grace_period`), then ends its process, not always
   with SIGHUP. The server stops the agent 5 s after its viewer vanishes if Warp is
-  still running; if Warp quit, the agent keeps running for `restore`.
+  still running; if Warp quit, the agent keeps running for `restore`. A server also
+  stops its agent after 2 hours with no viewer and no turn running
+  (`WARP_AGENT_IDLE_HOURS`, `--idle-hours`).
 - Warp's accessibility tree exposes only one text area. Check placement by
   screenshot and macOS text recognition (`warp-agent shot`), which opens a closed
   sidebar with Cmd+Shift+B. Recognition can return look-alike characters (a Cyrillic
