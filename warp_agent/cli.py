@@ -498,6 +498,16 @@ def cmd_send(args) -> int:
     return 0
 
 
+def cmd_detach(args) -> int:
+    """Take a session out of its pane, leaving the agent running (`view` or `restore` brings it back)."""
+    session = state.resolve(args.id)
+    try:
+        ptywrap.send(session.dir / "inbox", {"detach": True})
+    except RuntimeError as exc:
+        raise SystemExit(f"warp-agent: {exc}")
+    return 0
+
+
 def cmd_focus(args) -> int:
     session = state.resolve(args.id)
     if not session.pane.get("focus_url"):
@@ -648,6 +658,10 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--no-enter", action="store_true")
     send.add_argument("--key", action="append", help="special key: enter, esc, up, down, tab, ctrl-c, ...")
     send.set_defaults(func=cmd_send)
+
+    detach = sub.add_parser("detach", help="take a session out of its pane, leaving the agent running")
+    detach.add_argument("id")
+    detach.set_defaults(func=cmd_detach)
 
     focus = sub.add_parser("focus", help="bring a session's pane to the front")
     focus.add_argument("id")

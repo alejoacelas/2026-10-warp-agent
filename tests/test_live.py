@@ -262,11 +262,10 @@ class LiveWarpTest(unittest.TestCase):
         self.assertEqual(state.Session(sid).status["detail"], "pane closed in Warp")
 
     def test_10_restore_shows_a_session_that_lost_its_pane(self):
-        # Killing the viewer outright (no hang-up notice) leaves the agent running with no
-        # pane, as quitting Warp does. Restore must bring it back in its group.
+        # Detaching leaves the agent running with no pane, as quitting Warp does (which
+        # cannot be tested from inside Warp). Restore must bring it back in its group.
         sid = self.sessions["wc"]
-        session = state.Session(sid)
-        os.kill(session.pane["viewer_pid"], signal.SIGKILL)
+        wa("detach", sid)
         deadline = time.monotonic() + 10
         while state.Session(sid).proc.get("viewer"):
             self.assertLess(time.monotonic(), deadline)

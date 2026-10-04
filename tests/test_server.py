@@ -166,8 +166,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.server.wait(timeout=5), 0)
         self.assertEqual((self.root / "exit").read_text(), "5")
 
-    def hang_up_viewer(self, app_pid):
-        """Run a viewer on a real terminal inside `app_pid`, then hang it up as Warp would."""
+    def hang_up_viewer(self, app_pid, sig=signal.SIGHUP):
+        """Run a viewer on a real terminal inside `app_pid`, then end it as Warp would."""
         env = {**os.environ, "WARP_AGENT_APP_PID": str(app_pid)}
         pid, fd = pty.fork()
         if pid == 0:
@@ -179,7 +179,7 @@ class ServerTest(unittest.TestCase):
             ready, _, _ = select.select([fd], [], [], 0.2)
             if ready:
                 output += os.read(fd, 65536)
-        os.kill(pid, signal.SIGHUP)
+        os.kill(pid, sig)
         deadline = time.monotonic() + 5
         while True:
             done, status = os.waitpid(pid, os.WNOHANG)
@@ -188,7 +188,8 @@ class ServerTest(unittest.TestCase):
             self.assertLess(time.monotonic(), deadline, "viewer did not exit after SIGHUP")
             time.sleep(0.05)
         os.close(fd)
-        self.assertEqual(os.waitstatus_to_exitcode(status), 2)  # closed, not "agent ended"
+        if sig == signal.SIGHUP:
+            self.assertEqual(os.waitstatus_to_exitcode(status), 2)  # closed, not "agent ended"
 
     def fake_warp(self):
         app = subprocess.Popen(["sleep", "60"])
@@ -201,6 +202,26 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.server.wait(timeout=GRACE + 5), 0)
         # SIGTERM from the server ends the child: exit status -15.
         self.assertEqual((self.root / "exit").read_text(), "-15")
+
+    def test_a_viewer_killed_outright_while_warp_runs_ends_the_agent(self):
+        # Warp does not always hang a viewer up; whatever ends it, Warp still running means
+        # the pane is gone for good.
+        app = self.fake_warp()
+        self.hang_up_viewer(app.pid, signal.SIGKILL)
+        self.assertEqual(self.server.wait(timeout=GRACE + 5), 0)
+        self.assertEqual((self.root / "exit").read_text(), "-15")
+
+    def test_detach_keeps_the_agent_even_while_warp_runs(self):
+        viewer = Client(self.root / "sock")
+        viewer.send(b"A", struct.pack(">I", self.fake_warp().pid))
+        viewer.read_until(b"size")
+        ptywrap.send(self.root / "inbox", {"detach": True})
+        self.assertTrue(viewer.closed())
+        time.sleep(GRACE + 0.5)
+        self.assertIsNone(self.server.poll())
+        again = Client(self.root / "sock")
+        again.send(b"D", b"q")
+        self.assertTrue(again.closed())
 
     def test_quitting_warp_leaves_the_agent_running(self):
         app = self.fake_warp()

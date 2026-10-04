@@ -16,17 +16,19 @@ The server also:
   paste, mouse and focus reporting, keyboard protocol) and replays them to each
   new viewer, then nudges the window size so the agent repaints its screen.
 
-Closing the pane ends the agent; quitting Warp does not. Both hang up the viewer,
-so the viewer tells the server which Warp process it ran in, and the server
-waits a few seconds: if that Warp is still running, the pane was closed (Cmd+W)
-and the agent is stopped; if Warp is gone, it quit, and the agent keeps running
-for `warp-agent restore`. Viewers outside Warp, or replaced by a newer viewer,
-only detach.
+Closing the pane ends the agent; quitting Warp does not. On connecting, a viewer
+tells the server which Warp process it runs in. When a viewer disappears without
+the server having asked it to (it was not replaced, and no `detach` message came
+through the inbox), the server waits a few seconds: if that Warp is still running,
+the pane was closed (Cmd+W) and the agent is stopped; if Warp is gone, it quit, and
+the agent keeps running for `warp-agent restore`. This does not depend on how the
+viewer died: Warp may hang it up, end it, or close its terminal. Viewers outside
+Warp only detach.
 
 Viewer-to-server frames: one type byte, a 4-byte big-endian length, the payload.
 "D" carries input bytes; "W" carries the window size as two 16-bit integers
-(rows, columns); "H" says the viewer was hung up and carries the Warp app's
-process ID as a 32-bit integer. Server-to-viewer traffic is the agent's raw output.
+(rows, columns); "A" carries the Warp app's process ID as a 32-bit integer.
+Server-to-viewer traffic is the agent's raw output.
 """
 
 from __future__ import annotations
@@ -235,12 +237,17 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
     modes = TerminalModes()
     pending: list[tuple[float, bytes]] = []
     inbox_buffer = b""
-    close_check: tuple[float, int] | None = None  # (deadline, Warp app pid) after a hang-up
+    close_check: tuple[float, int] | None = None  # (deadline, Warp app pid) after a viewer vanished
+    viewer_app_pid: int | None = None
 
-    def drop_viewer():
-        nonlocal viewer, viewer_buffer
+    def drop_viewer(reason: str):
+        """Disconnect the viewer; one that vanished on its own may mean its pane closed."""
+        nonlocal viewer, viewer_buffer, close_check, viewer_app_pid
         if viewer is not None:
-            print(f"{time.ctime()}: viewer disconnected", file=sys.stderr, flush=True)
+            print(f"{time.ctime()}: viewer disconnected ({reason})", file=sys.stderr, flush=True)
+            if reason == "vanished" and viewer_app_pid:
+                close_check = (time.monotonic() + CLOSE_GRACE, viewer_app_pid)
+            viewer_app_pid = None
             viewer.close()
             viewer, viewer_buffer = None, b""
             if on_viewer:
@@ -259,10 +266,9 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
                 rows, cols = struct.unpack(">HH", payload)
                 if rows and cols:
                     _set_winsize(master, rows, cols)
-            elif kind == b"H" and len(payload) == 4:
-                nonlocal close_check
-                close_check = (time.monotonic() + CLOSE_GRACE, struct.unpack(">I", payload)[0])
-                print(f"{time.ctime()}: viewer hung up inside Warp pid {close_check[1]}", file=sys.stderr, flush=True)
+            elif kind == b"A" and len(payload) == 4:
+                nonlocal viewer_app_pid
+                viewer_app_pid = struct.unpack(">I", payload)[0]
 
     try:
         while True:
@@ -284,7 +290,7 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
             if close_check and close_check[0] <= now:
                 app_pid = close_check[1]
                 close_check = None
-                print(f"{time.ctime()}: after hang-up, viewer={'yes' if viewer else 'no'}, "
+                print(f"{time.ctime()}: viewer gone {CLOSE_GRACE:g}s, new viewer={'yes' if viewer else 'no'}, "
                       f"Warp pid {app_pid} alive={_pid_alive(app_pid)}", file=sys.stderr, flush=True)
                 if viewer is None and _pid_alive(app_pid):
                     # Warp is still running, so the user closed the pane: end the agent.
@@ -307,20 +313,20 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
                     try:
                         viewer.sendall(data)
                     except OSError:
-                        drop_viewer()
+                        drop_viewer("vanished")
                 if on_output:
                     for offset, key in enumerate(on_output(data) or []):
                         pending.append((time.monotonic() + 0.3 + 0.2 * offset, KEYS.get(key, key.encode())))
 
             if listener is not None and listener in ready:
                 incoming, _ = listener.accept()
+                drop_viewer("replaced")  # one viewer at a time; the newest wins
                 close_check = None  # a viewer came back, so nothing was closed for good
-                drop_viewer()  # one viewer at a time; the newest wins
                 viewer = incoming
                 try:
                     viewer.sendall(b"\x1b[2J\x1b[H" + modes.replay())
                 except OSError:
-                    drop_viewer()
+                    drop_viewer("vanished")
                 if viewer is not None:
                     # Nudge the size so the agent repaints for the new viewer; the
                     # viewer's own size frame follows and settles the real size.
@@ -335,7 +341,7 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
                 except OSError:
                     chunk = b""
                 if not chunk:
-                    drop_viewer()
+                    drop_viewer("vanished")
                 else:
                     viewer_buffer += chunk
                     handle_frames()
@@ -350,6 +356,9 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
                     try:
                         message = json.loads(line)
                     except ValueError:
+                        continue
+                    if message.get("detach"):
+                        drop_viewer("detached")
                         continue
                     delay = 0.0
                     text = message.get("text")
@@ -426,18 +435,19 @@ def view(socket_path: Path, connect_timeout: float = 15.0) -> int:
             except OSError:
                 pass
 
-    stop = hung_up = False
+    stop = False
 
-    def closed(signum, _frame):
-        nonlocal stop, hung_up
+    def closed(*_):
+        nonlocal stop
         stop = True
-        hung_up = signum == signal.SIGHUP
 
     if interactive:
         tty.setraw(stdin_fd)
         signal.signal(signal.SIGWINCH, send_size)
     for sig in (signal.SIGHUP, signal.SIGTERM):
         signal.signal(sig, closed)
+    if app_pid:
+        conn.sendall(_frame(b"A", struct.pack(">I", app_pid)))
     send_size()
     ended = False
     try:
@@ -459,19 +469,11 @@ def view(socket_path: Path, connect_timeout: float = 15.0) -> int:
                 except OSError:
                     data = b""
                 if not data:
-                    # The terminal went away (Warp closed the pane or quit): a hang-up,
-                    # whether or not SIGHUP also arrives.
-                    hung_up = True
-                    break
+                    break  # the terminal went away (Warp closed the pane or quit)
                 conn.sendall(_frame(b"D", data))
     except OSError:
         pass
     finally:
-        if hung_up and app_pid:
-            try:
-                conn.sendall(_frame(b"H", struct.pack(">I", app_pid)))
-            except OSError:
-                pass
         if saved is not None:
             # Leave the pane usable: exit the alternate screen and keyboard modes. The
             # terminal may already be gone (Warp quit), and nobody may be reading it, so
