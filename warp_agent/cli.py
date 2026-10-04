@@ -304,6 +304,18 @@ def cmd_hook(args) -> int:
 
 # Supervising ----------------------------------------------------------------------
 
+def latest_reply(session: state.Session) -> str | None:
+    """The reply from the Stop event that ended the turn, else the transcript's last reply.
+
+    Claude can run its Stop hook before writing the final message to the transcript,
+    so the transcript alone may still show the previous turn's reply.
+    """
+    status = session.status
+    if status.get("state") == "done" and status.get("last_message"):
+        return status["last_message"]
+    return transcripts.last_reply(session)
+
+
 def cmd_wait(args) -> int:
     session = state.resolve(args.id)
     baseline = state.read_json(session.dir / "sends.json", {}).get("seq", 0)
@@ -322,7 +334,7 @@ def cmd_wait(args) -> int:
         if result:
             break
         time.sleep(0.5)
-    reply = transcripts.last_reply(session) if result in ("done", "waiting", "exited", "ended") else None
+    reply = latest_reply(session) if result in ("done", "waiting", "exited", "ended") else None
     output = {"id": session.id, "result": result, "state": status.get("state"),
               "detail": status.get("detail"), "last_message": reply}
     if args.json:
@@ -339,7 +351,7 @@ def cmd_read(args) -> int:
     if args.log:
         print(transcripts.log_tail(session.dir / "output.log", args.bytes))
         return 0
-    reply = transcripts.last_reply(session)
+    reply = latest_reply(session)
     if reply is None:
         print("warp-agent: no reply yet", file=sys.stderr)
         return 1

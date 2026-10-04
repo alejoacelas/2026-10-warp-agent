@@ -78,7 +78,8 @@ def transition(event: str, payload: dict) -> dict | None:
                 "state": "idle", "detail": payload.get("source")}
     if event == "UserPromptSubmit":
         prompt = payload.get("prompt") or ""
-        return {"state": "working", "detail": None, "last_prompt": prompt[:500], "bump": True}
+        return {"state": "working", "detail": None, "last_prompt": prompt[:500], "last_message": None,
+                "bump": True}
     if event == "PreToolUse":
         if payload.get("tool_name") in WAITING_TOOLS:
             return {"state": "waiting", "detail": _summarize_tool(payload)}

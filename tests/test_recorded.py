@@ -55,6 +55,19 @@ class HookReplayTest(unittest.TestCase):
         self.assertRegex(final["agent_session_id"], r"^[0-9a-f-]{36}$")
         self.assertIn(final["agent_session_id"], final["transcript_path"])
 
+    def test_claude_reply_comes_from_the_stop_that_ended_the_turn(self):
+        seen, final = self.replay("events-claude-two-turns.jsonl")
+        # The follow-up asked for the commit hash only; Claude answered 11f1f2c.
+        self.assertEqual(final["last_message"], "11f1f2c")
+        second_prompt = [i for i, s in enumerate(seen) if s[0] == "UserPromptSubmit"][1]
+        lines = (FIXTURES / "events-claude-two-turns.jsonl").read_text().splitlines()
+        # Replaying up to the second prompt must not leave the first turn's reply behind.
+        self.tearDown(); self.setUp()
+        for line in lines[:second_prompt + 1]:
+            event = json.loads(line)
+            hooks.handle(event.pop("agent"), json.dumps(event))
+        self.assertNotIn("last_message", state.read_json(state.session_dir("replay") / "status.json"))
+
     def test_codex_autonomous_task_never_waits(self):
         seen, final = self.replay("events-codex-task.jsonl")
         self.assertNotIn("waiting", [s[1] for s in seen])
