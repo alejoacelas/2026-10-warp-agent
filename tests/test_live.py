@@ -15,9 +15,11 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -236,6 +238,38 @@ class LiveWarpTest(unittest.TestCase):
         wa("stop", sid)
         self.assertFalse(state.pid_alive(child))
         self.assertNotIn(sid, self.sidebar(self.sessions["fix"])[self.group_a])
+
+    def test_9_closing_the_pane_ends_the_agent(self):
+        sid = self.sessions["readme"]
+        session = state.Session(sid)
+        child = session.proc["child_pid"]
+        self.assertTrue(warp.focus(session.pane["focus_url"], session.meta["tab_title"]))
+        # Cmd+W, then Return on Warp's "Close pane? You have 1 process running" dialog.
+        warp.send_keys([("key", "w", ["command"]), ("delay", 0.8), ("code", warp.RETURN)],
+                       session.meta["tab_title"])
+        deadline = time.monotonic() + 15
+        while state.pid_alive(child):
+            self.assertLess(time.monotonic(), deadline, "agent still running after its pane closed")
+            time.sleep(0.5)
+        self.assertEqual(state.Session(sid).status["detail"], "pane closed in Warp")
+
+    def test_10_restore_shows_a_session_that_lost_its_pane(self):
+        # Killing the viewer outright (no hang-up notice) leaves the agent running with no
+        # pane, as quitting Warp does. Restore must bring it back in its group.
+        sid = self.sessions["wc"]
+        session = state.Session(sid)
+        os.kill(session.pane["viewer_pid"], signal.SIGKILL)
+        deadline = time.monotonic() + 10
+        while state.Session(sid).proc.get("viewer"):
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.2)
+        self.assertTrue(state.Session(sid).alive())
+        out = wa("restore").stdout
+        self.assertIn(sid, out)
+        self.assertTrue(state.Session(sid).proc.get("viewer"))
+        self.assertIn(sid, self.sidebar(sid)[self.group_a])
+        wa("send", sid, "Reply with the number of words wc.py counts in sample.txt in total, as a number only.")
+        self.assertIn("14", self.wait(sid))
 
 
 if __name__ == "__main__":

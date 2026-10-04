@@ -343,15 +343,21 @@ def cmd_serve(args) -> int:
         proc["viewer"] = connected
         save()
 
+    def on_pane_closed():
+        proc["ended_by"] = "pane closed in Warp"
+        save()
+
     def on_exit(code):
         proc.update(exit_code=code, ended_at=time.time(), viewer=False)
         save()
-        state.update_status(session.id, state="exited", detail=f"exit code {code}")
+        detail = proc.get("ended_by") or f"exit code {code}"
+        state.update_status(session.id, state="exited", detail=detail)
 
     save()
     return ptywrap.serve(agent_argv(session), session.dir / "inbox", session.dir / "output.log",
                          session.dir / "sock", on_start=on_start, on_exit=on_exit,
                          on_output=TrustPromptWatcher(session), on_viewer=on_viewer,
+                         on_pane_closed=on_pane_closed,
                          winsize=(args.rows, args.cols))
 
 
@@ -384,6 +390,34 @@ def cmd_restore(args) -> int:
                       meta["tab_title"], meta.get("group"), False, session)
         print(f"{session.id}: {'restored pane' if reused else 'new tab'}"
               + (f" in {meta['group']}" if meta.get("group") else ""))
+    return 0
+
+
+def cmd_prune(args) -> int:
+    """List (or with --yes, delete) the folders of sessions that ended long enough ago."""
+    cutoff = time.time() - args.days * 86400
+    old = []
+    for session in state.Session.all():
+        if session.alive():
+            continue
+        ended = session.proc.get("ended_at") or session.status.get("updated_at") or session.meta.get("created_at", 0)
+        if ended < cutoff:
+            old.append(session)
+    size = sum(f.stat().st_size for s in old for f in s.dir.rglob("*") if f.is_file())
+    print(f"{len(old)} ended sessions older than {args.days:g} days, {size / 1e6:.1f} MB")
+    if not args.yes:
+        for session in old:
+            print(f"  {session.id}")
+        print("run again with --yes to delete them")
+        return 0
+    for session in old:
+        shutil.rmtree(session.dir)
+    with state.locked(state.home() / "groups.lock"):
+        groups = state.load_groups()
+        for group in groups.values():
+            group["members"] = [m for m in group["members"] if (state.session_dir(m) / "meta.json").exists()]
+        state.write_json(state.groups_path(), {k: v for k, v in groups.items() if v["members"]})
+    print("deleted")
     return 0
 
 
@@ -650,6 +684,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     restore = sub.add_parser("restore", help="show running sessions again after Warp restarts")
     restore.set_defaults(func=cmd_restore)
+
+    prune = sub.add_parser("prune", help="list or delete folders of sessions that ended days ago")
+    prune.add_argument("--days", type=float, default=7)
+    prune.add_argument("--yes", action="store_true", help="delete instead of listing")
+    prune.set_defaults(func=cmd_prune)
 
     sub.add_parser("_start").set_defaults(func=cmd_start)
     serve = sub.add_parser("_serve")

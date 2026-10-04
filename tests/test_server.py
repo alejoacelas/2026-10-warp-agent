@@ -23,6 +23,7 @@ from pathlib import Path
 from warp_agent import ptywrap
 
 REPO = Path(__file__).resolve().parent.parent
+GRACE = 1.0  # shortened close-versus-quit wait for tests
 
 CHILD = textwrap.dedent("""
     import os, signal, sys, time, tty
@@ -121,7 +122,8 @@ class ServerTest(unittest.TestCase):
         (self.root / "child.py").write_text(CHILD)
         self.server = subprocess.Popen([sys.executable, "-c", SERVER, str(REPO), str(self.root)],
                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL, start_new_session=True)
+                                       stderr=subprocess.DEVNULL, start_new_session=True,
+                                       env={**os.environ, "WARP_AGENT_CLOSE_GRACE": str(GRACE)})
 
     def tearDown(self):
         if self.server.poll() is None:
@@ -164,11 +166,12 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.server.wait(timeout=5), 0)
         self.assertEqual((self.root / "exit").read_text(), "5")
 
-    def test_hanging_up_the_viewer_leaves_the_agent_running(self):
-        # The viewer runs on a real terminal; SIGHUP is what Warp sends when it quits.
+    def hang_up_viewer(self, app_pid):
+        """Run a viewer on a real terminal inside `app_pid`, then hang it up as Warp would."""
+        env = {**os.environ, "WARP_AGENT_APP_PID": str(app_pid)}
         pid, fd = pty.fork()
         if pid == 0:
-            os.execv(sys.executable, [sys.executable, "-c", VIEWER, str(REPO), str(self.root)])
+            os.execve(sys.executable, [sys.executable, "-c", VIEWER, str(REPO), str(self.root)], env)
         output = b""
         deadline = time.monotonic() + 10
         while b"size" not in output:
@@ -186,7 +189,25 @@ class ServerTest(unittest.TestCase):
             time.sleep(0.05)
         os.close(fd)
         self.assertEqual(os.waitstatus_to_exitcode(status), 2)  # closed, not "agent ended"
-        time.sleep(0.3)
+
+    def fake_warp(self):
+        app = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(app.kill)
+        return app
+
+    def test_closing_the_pane_while_warp_runs_ends_the_agent(self):
+        app = self.fake_warp()
+        self.hang_up_viewer(app.pid)
+        self.assertEqual(self.server.wait(timeout=GRACE + 5), 0)
+        # SIGTERM from the server ends the child: exit status -15.
+        self.assertEqual((self.root / "exit").read_text(), "-15")
+
+    def test_quitting_warp_leaves_the_agent_running(self):
+        app = self.fake_warp()
+        self.hang_up_viewer(app.pid)
+        app.kill()
+        app.wait()
+        time.sleep(GRACE + 0.5)
         self.assertIsNone(self.server.poll())
         viewer = Client(self.root / "sock")
         viewer.send(b"D", b"x")
@@ -194,6 +215,14 @@ class ServerTest(unittest.TestCase):
         viewer.send(b"D", b"q")
         self.assertTrue(viewer.closed())
 
+    def test_reattaching_within_the_grace_period_keeps_the_agent(self):
+        app = self.fake_warp()
+        self.hang_up_viewer(app.pid)
+        viewer = Client(self.root / "sock")
+        time.sleep(GRACE + 0.5)
+        self.assertIsNone(self.server.poll())
+        viewer.send(b"D", b"q")
+        self.assertTrue(viewer.closed())
 
 if __name__ == "__main__":
     unittest.main()
