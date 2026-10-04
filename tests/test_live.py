@@ -244,9 +244,15 @@ class LiveWarpTest(unittest.TestCase):
         session = state.Session(sid)
         child = session.proc["child_pid"]
         self.assertTrue(warp.focus(session.pane["focus_url"], session.meta["tab_title"]))
-        # Cmd+W, then Return on Warp's "Close pane? You have 1 process running" dialog.
-        warp.send_keys([("key", "w", ["command"]), ("delay", 0.8), ("code", warp.RETURN)],
-                       session.meta["tab_title"])
+        # Cmd+W, then Return on Warp's "Close pane? You have 1 process running" dialog,
+        # once it is open (while it is, Warp reports no front window title).
+        warp.send_keys([("key", "w", ["command"])], session.meta["tab_title"])
+        deadline = time.monotonic() + 5
+        while warp.front_window_title() is not None:
+            self.assertLess(time.monotonic(), deadline, "Warp showed no close dialog")
+            time.sleep(0.1)
+        time.sleep(0.3)
+        warp.send_keys([("code", warp.RETURN)], None)
         # Warp keeps a closed pane for 60 s so Cmd+Shift+T can reopen it
         # (general.undo_close.grace_period); then it hangs up, and the server waits 5 s.
         deadline = time.monotonic() + 90
