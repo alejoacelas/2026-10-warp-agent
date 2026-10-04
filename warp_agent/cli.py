@@ -206,6 +206,8 @@ def place_tab(stem: str, panes: list[dict], title: str, group: str | None,
 
 
 def cmd_new(args) -> int:
+    if not args.agent:
+        raise SystemExit("warp-agent: choose an agent with --agent claude or --agent codex")
     prompt = _prompt_text(args)
     if args.split:
         target = state.resolve(args.split)
@@ -235,6 +237,8 @@ def cmd_panes(args) -> int:
         raise SystemExit("warp-agent: the manifest must be a JSON list of 2 to 4 tasks")
     title = args.title or state.new_session_id(args.group or "panes")
     sessions = []
+    if any(not (task.get("agent") or args.agent) for task in tasks):
+        raise SystemExit('warp-agent: give each task an "agent" (claude or codex), or pass --agent')
     for task in tasks:
         task_args = argparse.Namespace(**{**vars(args), "agent": task.get("agent", args.agent),
                                           "dir": task.get("dir", args.dir), "name": task.get("name"),
@@ -687,7 +691,8 @@ def cmd_shot(args) -> int:
 # Entry point ------------------------------------------------------------------------
 
 def _launch_options(parser):
-    parser.add_argument("--agent", choices=["claude", "codex"], default="claude")
+    parser.add_argument("--agent", choices=["claude", "codex"],
+                        help="which agent to run (required for `new`; per task or here for `panes`)")
     parser.add_argument("--dir", help="working directory (default: current)")
     parser.add_argument("--group", help="Warp tab group to open in; created if missing")
     parser.add_argument("--window", action="store_true", help="open in a new Warp window")

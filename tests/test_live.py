@@ -146,7 +146,7 @@ class LiveWarpTest(unittest.TestCase):
         return result
 
     def test_01_claude_in_new_group_fixes_bug(self):
-        sid = self.launch("fix", "--window", "--group", self.group_a, "--dir", str(self.stats),
+        sid = self.launch("fix", "--agent", "claude", "--window", "--group", self.group_a, "--dir", str(self.stats),
                           "--name", "live-fix",
                           "The median test fails. Fix stats.py so all tests pass, run them, and commit. "
                           "Reply with one sentence.")
@@ -198,7 +198,7 @@ class LiveWarpTest(unittest.TestCase):
 
     def test_05_split_an_existing_pane(self):
         target = self.sessions["wc"]
-        sid = self.launch("readme", "--split", target, "--dir", str(self.wc), "--name", "live-readme",
+        sid = self.launch("readme", "--agent", "claude", "--split", target, "--dir", str(self.wc), "--name", "live-readme",
                           "Write README.md documenting wc.py's options with one real example each, then commit.")
         self.wait(sid)
         self.assertIn("README.md", git(self.wc, "show", "--stat", "--format=", "HEAD"))
@@ -208,7 +208,7 @@ class LiveWarpTest(unittest.TestCase):
         self.assertEqual(front, state.Session(target).meta["tab_title"])
 
     def test_06_permission_prompts_are_reported_and_answerable(self):
-        sid = self.launch("perm", "--ask-permissions", "--group", self.group_b, "--dir", str(self.perm),
+        sid = self.launch("perm", "--agent", "claude", "--ask-permissions", "--group", self.group_b, "--dir", str(self.perm),
                           "--name", "live-perm",
                           "Write the output of the date command to notes.txt and commit it.")
         self.assertIn("folder trust prompt", self.wait(sid, "WAITING", 90))
@@ -223,7 +223,7 @@ class LiveWarpTest(unittest.TestCase):
         self.assertIn("notes.txt", git(self.perm, "show", "--stat", "--format=", "HEAD"))
 
     def test_07_fork_remembers_the_original_conversation(self):
-        sid = self.launch("fork", "--fork", self.sessions["fix"], "--group", self.group_a, "--dir", str(self.stats),
+        sid = self.launch("fork", "--agent", "claude", "--fork", self.sessions["fix"], "--group", self.group_a, "--dir", str(self.stats),
                           "--name", "live-fork",
                           "Without running commands or reading files: which function did you fix first, and "
                           "what was wrong with it? One sentence.")

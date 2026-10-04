@@ -13,7 +13,7 @@ launch pattern builds on Peter Hartree's
 ## Usage
 
 ```sh
-id=$(warp-agent new --group myproject --dir ~/code/app "Fix the failing test and commit")
+id=$(warp-agent new --agent claude --group myproject --dir ~/code/app "Fix the failing test and commit")
 warp-agent wait "$id"              # DONE / WAITING / EXITED / TIMEOUT, then the last reply
 warp-agent send "$id" "Now add a regression test"
 warp-agent wait "$id"
@@ -40,7 +40,7 @@ agent running without a pane; `view <id>` shows it in any terminal. Restarting t
 Mac ends every agent; conversations still resume. `warp-agent prune` lists the
 folders of sessions that ended over a week ago, and deletes them with `--yes`.
 
-- `--agent codex` runs Codex instead of Claude Code.
+- `--agent claude` or `--agent codex` is required; there is no default agent.
 - `--window` opens a new Warp window; `--split <id>` opens beside another session.
 - `warp-agent panes tasks.json --group G` opens 2–4 agents as panes of one tab.
 - `--fork [<id>]` copies the current Claude conversation or another session.
