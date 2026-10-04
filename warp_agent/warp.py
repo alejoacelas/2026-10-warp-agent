@@ -284,31 +284,50 @@ def sidebar_visible(lines: list[dict], scale: float = 1.0) -> bool:
     return any(l["x"] < 120 * scale and "search tabs" in normalize(l["text"]) for l in lines)
 
 
+def sidebar_edge(lines: list[dict], scale: float = 1.0) -> float:
+    """Right edge of the vertical tabs panel: its "+" button ends the "Search tabs" row.
+
+    The panel's width varies by window, so a fixed cutoff can include terminal text.
+    """
+    search = next((l for l in lines if "search tabs" in normalize(l["text"])), None)
+    if search is not None:
+        buttons = [l for l in lines if abs(l["y"] - search["y"]) < 20 * scale
+                   and l["x"] > search["x"] and len(l["text"].strip()) <= 3 and "+" in l["text"]]
+        if buttons:
+            return max(l["x"] + l["w"] for l in buttons) + 2 * scale
+    return 175 * scale
+
+
 def sidebar_groups(lines: list[dict], scale: float = 1.0) -> dict[str, list[str]]:
     """Read tab groups from the vertical tabs sidebar of a screenshot.
 
-    A group header is a line followed by an "N tab(s)" line. Its members are the
-    rows below it that are indented further than the header, until a row at or
-    left of the header's indent. The sidebar's rows start within its first 200
-    points; terminal text starts past the default 248-point sidebar width.
+    A group header sits at the outer indent and is followed (after its "N tabs"
+    line) by rows indented further; ungrouped tabs and their subtitles share the
+    outer indent. Members are the indented rows until the next outer-indent row.
     """
-    rows = sorted((l for l in lines if l["x"] < 200 * scale), key=lambda l: l["y"])
+    if not sidebar_visible(lines, scale):
+        return {}
+    edge = sidebar_edge(lines, scale)
+    rows = sorted((l for l in lines if l["x"] < edge and "search tabs" not in normalize(l["text"])),
+                  key=lambda l: l["y"])
     is_count = lambda row: re.fullmatch(r"\d+ tabs?", normalize(row["text"])) is not None
     is_symbol = lambda row: len(re.sub(r"[^0-9a-z]", "", normalize(row["text"]))) < 2
+    rows = [r for r in rows if not is_symbol(r)]
     groups: dict[str, list[str]] = {}
     current = None
     header_x = 0
     for index, row in enumerate(rows):
-        if is_count(row) or is_symbol(row):
+        if is_count(row):
             continue
-        following = next((r for r in rows[index + 1:] if not is_symbol(r)), None)
-        if following is not None and is_count(following):
+        following = next((r for r in rows[index + 1:] if not is_count(r)), None)
+        followed_by_count = index + 1 < len(rows) and is_count(rows[index + 1])
+        indented_next = following is not None and following["x"] > row["x"] + 6 * scale
+        if current is not None and row["x"] > header_x + 6 * scale:
+            groups[current].append(normalize(row["text"]))
+            continue
+        current = None
+        if followed_by_count or indented_next:
             current = normalize(row["text"])
             header_x = row["x"]
             groups[current] = []
-        elif current is not None:
-            if row["x"] > header_x + 6 * scale:
-                groups[current].append(normalize(row["text"]))
-            else:
-                current = None
     return groups

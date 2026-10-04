@@ -131,6 +131,16 @@ class SidebarTest(unittest.TestCase):
         self.assertFalse(warp.sidebar_visible(hidden, scale))
         self.assertTrue(warp.sidebar_visible(shown, scale))
 
+    def test_narrow_panel_with_a_missed_tab_count(self):
+        # The panel is narrower here, terminal text starts close to it, and recognition
+        # misses the "1 tab" line under the second group.
+        groups = self.groups("sidebar-narrow-2x.png", 2.0)
+        self.assertEqual(groups, {"live-a-6f99": ["live-fix-9f99", "live-wc-2475"],
+                                  "live-b-6f99": ["pair-live-b-6f99"]})
+
+    def test_hidden_panel_yields_no_groups(self):
+        self.assertEqual(self.groups("sidebar-hidden-1400px.png", 1400 / 1280), {})
+
     def test_two_groups_at_reduced_size(self):
         groups = self.groups("sidebar-pair-1400px.png", 1400 / 1280)
         self.assertEqual(groups["wa-test"], ["stats-fix-ac68", "wc-top-9eb8"])
