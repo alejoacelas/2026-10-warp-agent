@@ -16,14 +16,15 @@ The server also:
   paste, mouse and focus reporting, keyboard protocol) and replays them to each
   new viewer, then nudges the window size so the agent repaints its screen.
 
-Closing the pane ends the agent; quitting Warp does not. On connecting, a viewer
-tells the server which Warp process it runs in. When a viewer disappears without
-the server having asked it to (it was not replaced, and no `detach` message came
-through the inbox), the server waits a few seconds: if that Warp is still running,
-the pane was closed (Cmd+W) and the agent is stopped; if Warp is gone, it quit, and
-the agent keeps running for `warp-agent restore`. This does not depend on how the
-viewer died: Warp may hang it up, end it, or close its terminal. Viewers outside
-Warp only detach.
+When a viewer disappears without the server having asked it to (it was not
+replaced, and no `detach` message came through the inbox), the server waits a few
+seconds for a new viewer, then stops the agent and reports whether the Warp
+process the viewer ran in (sent when it connected) was still running: still
+running means the pane was closed (Cmd+W); gone means Warp quit, and the session
+can be resumed when Warp restores its pane. With `keep_running`, an agent whose
+Warp quit (or whose viewer ran outside Warp) is kept instead, for
+`warp-agent restore`. This does not depend on how the viewer died: Warp may hang
+it up, end it, or close its terminal.
 
 An agent with no viewer that is not mid-turn is stopped once it has stayed that
 way for `idle_limit` seconds, so agents left behind after quitting Warp do not
@@ -190,7 +191,7 @@ def _frame(kind: bytes, payload: bytes) -> bytes:
 def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None = None,
           on_start=None, on_exit=None, on_output=None, on_viewer=None, on_pane_closed=None,
           winsize: tuple[int, int] | None = None, idle_limit: float = 0, is_busy=None,
-          on_idle_stop=None) -> int:
+          on_idle_stop=None, keep_running: bool = False) -> int:
     """Run argv under a PTY until it exits; return its exit code.
 
     With `socket_path`, wait for the first viewer before starting the agent (so
@@ -252,8 +253,8 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
         nonlocal viewer, viewer_buffer, close_check, viewer_app_pid
         if viewer is not None:
             print(f"{time.ctime()}: viewer disconnected ({reason})", file=sys.stderr, flush=True)
-            if reason == "vanished" and viewer_app_pid:
-                close_check = (time.monotonic() + CLOSE_GRACE, viewer_app_pid)
+            if reason == "vanished":
+                close_check = (time.monotonic() + CLOSE_GRACE, viewer_app_pid or 0)
             viewer_app_pid = None
             viewer.close()
             viewer, viewer_buffer = None, b""
@@ -311,12 +312,12 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
             if close_check and close_check[0] <= now:
                 app_pid = close_check[1]
                 close_check = None
+                warp_running = bool(app_pid) and _pid_alive(app_pid)
                 print(f"{time.ctime()}: viewer gone {CLOSE_GRACE:g}s, new viewer={'yes' if viewer else 'no'}, "
-                      f"Warp pid {app_pid} alive={_pid_alive(app_pid)}", file=sys.stderr, flush=True)
-                if viewer is None and _pid_alive(app_pid):
-                    # Warp is still running, so the user closed the pane: end the agent.
+                      f"Warp pid {app_pid or 'unknown'} running={warp_running}", file=sys.stderr, flush=True)
+                if viewer is None and (warp_running or not keep_running):
                     if on_pane_closed:
-                        on_pane_closed()
+                        on_pane_closed(warp_running)
                     os.kill(pid, signal.SIGTERM)
 
             if master in ready:

@@ -53,7 +53,9 @@ SERVER = textwrap.dedent("""
     root = Path(sys.argv[2])
     code = ptywrap.serve([sys.executable, str(root / "child.py"), str(root / "started")],
                          root / "inbox", root / "output.log", root / "sock", winsize=(30, 100),
-                         idle_limit=float(sys.argv[3]), is_busy=lambda: (root / "busy").exists())
+                         idle_limit=float(sys.argv[3]), is_busy=lambda: (root / "busy").exists(),
+                         keep_running=sys.argv[4] == "1",
+                         on_pane_closed=lambda running: (root / "closed").write_text(str(running)))
     (root / "exit").write_text(str(code))
 """)
 
@@ -118,13 +120,14 @@ class Client:
 
 class ServerTest(unittest.TestCase):
     idle_limit = 0  # seconds; subclasses turn the idle cleanup on
+    keep_running = False  # the default: a vanished viewer stops the agent
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         (self.root / "child.py").write_text(CHILD)
         self.server = subprocess.Popen([sys.executable, "-c", SERVER, str(REPO), str(self.root),
-                                        str(self.idle_limit)],
+                                        str(self.idle_limit), "1" if self.keep_running else "0"],
                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                        stderr=subprocess.DEVNULL, start_new_session=True,
                                        env={**os.environ, "WARP_AGENT_CLOSE_GRACE": str(GRACE)})
@@ -206,6 +209,16 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.server.wait(timeout=GRACE + 5), 0)
         # SIGTERM from the server ends the child: exit status -15.
         self.assertEqual((self.root / "exit").read_text(), "-15")
+        self.assertEqual((self.root / "closed").read_text(), "True")
+
+    def test_quitting_warp_ends_the_agent_as_resumable(self):
+        app = self.fake_warp()
+        self.hang_up_viewer(app.pid)
+        app.kill()
+        app.wait()
+        self.assertEqual(self.server.wait(timeout=GRACE + 5), 0)
+        self.assertEqual((self.root / "exit").read_text(), "-15")
+        self.assertEqual((self.root / "closed").read_text(), "False")
 
     def test_a_viewer_killed_outright_while_warp_runs_ends_the_agent(self):
         # Warp does not always hang a viewer up; whatever ends it, Warp still running means
@@ -227,7 +240,7 @@ class ServerTest(unittest.TestCase):
         again.send(b"D", b"q")
         self.assertTrue(again.closed())
 
-    def test_quitting_warp_leaves_the_agent_running(self):
+    def _test_quitting_warp_leaves_the_agent_running(self):
         app = self.fake_warp()
         self.hang_up_viewer(app.pid)
         app.kill()
@@ -240,7 +253,7 @@ class ServerTest(unittest.TestCase):
         viewer.send(b"D", b"q")
         self.assertTrue(viewer.closed())
 
-    def test_reattaching_within_the_grace_period_keeps_the_agent(self):
+    def _test_reattaching_within_the_grace_period_keeps_the_agent(self):
         app = self.fake_warp()
         self.hang_up_viewer(app.pid)
         viewer = Client(self.root / "sock")
@@ -248,6 +261,19 @@ class ServerTest(unittest.TestCase):
         self.assertIsNone(self.server.poll())
         viewer.send(b"D", b"q")
         self.assertTrue(viewer.closed())
+
+
+class BackgroundModeTest(ServerTest):
+    """With keep_running (`--background`), quitting Warp leaves the agent running."""
+
+    keep_running = True
+    test_quitting_warp_leaves_the_agent_running = ServerTest._test_quitting_warp_leaves_the_agent_running
+    test_reattaching_within_the_grace_period_keeps_the_agent = (
+        ServerTest._test_reattaching_within_the_grace_period_keeps_the_agent)
+    test_quitting_warp_ends_the_agent_as_resumable = None
+    test_agent_starts_only_after_the_first_viewer = None
+    test_input_inbox_and_exit_reach_the_right_places = None
+    test_detach_keeps_the_agent_even_while_warp_runs = None
 
 
 class IdleCleanupTest(ServerTest):
@@ -288,8 +314,7 @@ class IdleCleanupTest(ServerTest):
     test_closing_the_pane_while_warp_runs_ends_the_agent = None
     test_a_viewer_killed_outright_while_warp_runs_ends_the_agent = None
     test_detach_keeps_the_agent_even_while_warp_runs = None
-    test_quitting_warp_leaves_the_agent_running = None
-    test_reattaching_within_the_grace_period_keeps_the_agent = None
+    test_quitting_warp_ends_the_agent_as_resumable = None
 
 
 if __name__ == "__main__":

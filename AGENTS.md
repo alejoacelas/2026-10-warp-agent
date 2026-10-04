@@ -16,8 +16,9 @@ Absolute paths point into this checkout: the `~/.local/bin/warp-agent` link, and
 running session's `run` script, `claude-settings.json` and background server in
 `~/.local/state/warp-agent/sessions/`. Stop running sessions first (`warp-agent ls`,
 `warp-agent stop`), move the repository, then re-create the link:
-`ln -sf <new path>/bin/warp-agent ~/.local/bin/warp-agent`. Update the `supervise-workers`
-skill's link to this repository too.
+`ln -sf <new path>/bin/warp-agent ~/.local/bin/warp-agent`. Update the
+`shell/resume.zsh` path in `~/.zshrc` and the `supervise-workers` skill's link to this
+repository too.
 
 ## Layout
 
@@ -56,10 +57,15 @@ Source references are to `reference/warp`.
 - A pane closes when its shell exits, so panes `exec` the session's viewer.
 - Closing a pane (Cmd+W, then "Yes, close") keeps it for 60 s so Cmd+Shift+T can
   reopen it (`general.undo_close.grace_period`), then ends its process, not always
-  with SIGHUP. The server stops the agent 5 s after its viewer vanishes if Warp is
-  still running; if Warp quit, the agent keeps running for `restore`. A server also
-  stops its agent after 2 hours with no viewer and no turn running
-  (`WARP_AGENT_IDLE_HOURS`, `--idle-hours`).
+  with SIGHUP. The server stops the agent 5 s after its viewer vanishes. If Warp had
+  quit, the session is marked resumable.
+- Warp restores a pane with its saved ID (`app/src/pane_group/mod.rs:1635`), so
+  `WARP_TERMINAL_SESSION_UUID` survives a restart (with `restore_session = true`).
+  `shell/resume.zsh`, sourced from `~/.zshrc`, looks the ID up in
+  `~/.local/state/warp-agent/panes/` and resumes the session there, just before the
+  first prompt so Warp has set the shell up.
+- `--background` sessions instead survive Warp quitting, and are stopped after 2 hours
+  with no viewer and no turn running (`WARP_AGENT_IDLE_HOURS`, `--idle-hours`).
 - Warp's accessibility tree exposes only one text area. Check placement by
   screenshot and macOS text recognition (`warp-agent shot`), which opens a closed
   sidebar with Cmd+Shift+B. Recognition can return look-alike characters (a Cyrillic
@@ -77,12 +83,14 @@ Source references are to `reference/warp`.
 ## Checking survival across a Warp restart
 
 This cannot run from inside Warp, because quitting Warp ends the session running the
-check. With one or more agents running, quit Warp (Cmd+Q), reopen it, then run:
+check. Start an agent and give it something to remember, quit Warp (Cmd+Q), reopen
+it, then:
 
-1. `warp-agent ls`: the agents are still listed as running, marked "(no pane)".
-2. `warp-agent restore`: each session reports "restored pane" (Warp kept the pane's
-   ID, so the session went back into its restored pane) or "new tab".
-3. `warp-agent send <id> "..."` and `warp-agent wait <id>`: the agent still answers.
+1. The restored pane shows the agent again with its conversation; `warp-agent ls`
+   lists it as running.
+2. `warp-agent send <id> "what did I ask you to remember?"` and `warp-agent wait <id>`.
+3. For a `--background` agent: `warp-agent ls` shows it running with "(no pane)", and
+   `warp-agent restore` puts it back in its restored pane or a new tab.
 
 ## Testing
 

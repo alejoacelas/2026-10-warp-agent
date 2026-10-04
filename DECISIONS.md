@@ -11,9 +11,9 @@
 - [Hooks and transcripts are the source of status and replies](#hooks-and-transcripts).
 - [Hooks are passed per launch, never installed globally](#per-launch-hooks).
 - [A PTY wrapper carries follow-up messages and answers trust prompts](#pty-wrapper).
-- [Agents run under a background server and survive quitting Warp](#background-server).
-- [Closing a pane ends its agent; quitting Warp does not](#close-versus-quit).
-- [Agents left with no pane are stopped after 2 idle hours](#idle-cleanup).
+- [Agents run under a server process that a Warp pane views](#background-server).
+- [By default, quitting Warp stops agents and restored panes resume them](#resume-by-default).
+- [Background agents left with no pane are stopped after 2 idle hours](#idle-cleanup).
 
 ### Keep both apps working
 - [`supervise-workers` keeps an Orca track and adds a Warp track](#two-tracks).
@@ -59,24 +59,27 @@ so the wrapper also watches output for it: it accepts in the default (approvals
 bypassed) mode and reports `waiting` with `--ask-permissions`.
 
 ### Background server
-Asked for on 2026-10-04 so agents survive quitting Warp. The server owns the agent's
+The server owns the agent's
 terminal; panes run viewers. It waits for the first viewer before starting the
 agent, so the agent's startup queries to the terminal get answers, and replays the
 terminal modes the agent switched on (alternate screen, bracketed paste, mouse,
 keyboard protocol) to each new viewer. Without the replay a re-attached pane shows
 a garbled screen and misreads keys.
 
-### Close versus quit
-Closing a pane is how the user ends a finished session, so it must stop the agent,
-or idle agents pile up at 200–500 MB each. Quitting Warp must not. Both end the
-viewer, and Warp does not reliably hang it up, so the viewer reports its Warp
-process when it connects and the server checks, 5 s after any viewer loss it did
-not cause, whether that Warp is still running. `detach` is the deliberate way to
-leave an agent running without a pane.
+### Resume by default
+Decided on 2026-10-04, replacing "keep agents running when Warp quits" as the
+default: the user wants Warp to come back to the same sessions, not to keep them
+alive. Agents stop when their pane goes away, so idle agents (200–500 MB each)
+never pile up, and Warp's restored panes resume the conversations. Warp does not
+reliably hang up a viewer, so the viewer reports its Warp process when it connects
+and the server checks, 5 s after any viewer loss it did not cause, whether that Warp
+is still running: running means the pane was closed for good; gone means Warp quit,
+and the session is marked resumable. `--background` keeps the survive-a-quit
+behavior as an option, and `detach` leaves an agent running without a pane.
 
 ### Idle cleanup
-Asked for on 2026-10-04 as a strict default: background agents otherwise run until
-the Mac restarts. The server stops an agent after 2 hours with no viewer and no
+Asked for on 2026-10-04 as a strict default: background and detached agents
+otherwise run until the Mac restarts. The server stops an agent after 2 hours with no viewer and no
 turn running (hook state not `working`); a long turn finishes first. Agents shown in
 a pane are never stopped this way, since closing the pane already ends them.
 
@@ -101,5 +104,5 @@ complement screenshots but are not built.
   Warp skills.
 - 2026-10-04: Built and verified live: per-launch hooks, trust-prompt handling,
   screenshot verification.
-- 2026-10-04: Background server so agents survive quitting Warp; closing a pane ends
-  its agent after Warp's 60 s undo window plus 5 s.
+- 2026-10-04: Background server; closing a pane ends its agent after Warp's 60 s
+  undo window plus 5 s. Default changed the same day to stop-and-resume.

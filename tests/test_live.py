@@ -278,6 +278,44 @@ class LiveWarpTest(unittest.TestCase):
         wa("send", sid, "Reply with the number of words wc.py counts in sample.txt in total, as a number only.")
         self.assertIn("14", self.wait(sid))
 
+    def test_11_resume_continues_the_conversation(self):
+        # Stopping and resuming in a new tab must keep the conversation, for both agents.
+        for key, question, expected in [
+                ("fix", "Without running commands: which function did you fix first? One word.", "median"),
+                ("wc", "Without running commands: what did --top 2 print in your last check? "
+                       "Reply with the words only.", "the")]:
+            sid = self.sessions[key]
+            wa("stop", sid)
+            wa("resume", sid, "--tab")
+            self.assertTrue(state.Session(sid).alive())
+            wa("send", sid, question)
+            self.assertIn(expected, self.wait(sid).lower())
+
+    def test_12_a_restored_pane_resumes_its_session(self):
+        # Warp restores a pane with its old WARP_TERMINAL_SESSION_UUID and an interactive
+        # shell; the hook sourced from ~/.zshrc then resumes the session that pane showed.
+        # Quitting Warp cannot be done from inside it, so stop the session, mark it as
+        # ended by a quit, and start an interactive shell carrying the old pane ID.
+        sid = self.sessions["fix"]
+        old_pane = state.Session(sid).pane["warp_session_uuid"]
+        wa("stop", sid)
+        proc = state.Session(sid).proc
+        proc.update(resumable=True, ended_by="Warp quit")
+        state.write_json(state.session_dir(sid) / "proc.json", proc)
+        warp.write_tab_config("warp-agent-live-restored", "restored-pane",
+                              [{"directory": str(self.stats),
+                                "command": f"WARP_TERMINAL_SESSION_UUID={old_pane} exec zsh -i"}])
+        try:
+            warp.open_tab_config("warp-agent-live-restored")
+            deadline = time.monotonic() + 30
+            while not state.Session(sid).alive():
+                self.assertLess(time.monotonic(), deadline, "the restored pane did not resume")
+                time.sleep(0.5)
+        finally:
+            (warp.TAB_CONFIG_DIR / "warp-agent-live-restored.toml").unlink(missing_ok=True)
+        wa("send", sid, "Without running commands: which function did you fix first? One word.")
+        self.assertIn("median", self.wait(sid).lower())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,16 +24,21 @@ warp-agent stop "$id"              # ends the agent and closes its tab
 warp-agent ls
 ```
 
-Agents run in the background and survive quitting Warp. After reopening Warp,
-`warp-agent restore` shows each running session again, in the pane Warp restored or
-in a new tab in its group. Closing a session's pane (Cmd+W) ends its agent once
-Warp's 60-second undo window passes. `warp-agent detach <id>` leaves an agent
-running without a pane; `warp-agent view <id>` shows it in any terminal.
-An agent with no pane and no turn running is stopped after 2 hours
-(`--idle-hours H` per launch or `WARP_AGENT_IDLE_HOURS`; `0` never). Restarting or
-logging out of the Mac ends all agents; their conversations resume with
-`claude --resume <id>` or `codex resume <id>`. `warp-agent prune` lists the folders
-of sessions that ended over a week ago, and deletes them with `--yes`.
+When Warp quits, its agents stop, and when Warp restores their panes (with
+`restore_session = true`) each pane resumes its conversation with `claude --resume`
+or `codex resume`. That needs one line in `~/.zshrc`:
+`[[ -r <repo>/shell/resume.zsh ]] && source <repo>/shell/resume.zsh`.
+`warp-agent restore` resumes any session whose pane Warp did not restore, in a new
+tab in its group, and `warp-agent resume <id> [--tab]` resumes one by hand.
+Closing a session's pane (Cmd+W) ends it for good once Warp's 60-second undo window
+passes.
+
+`--background` instead keeps an agent running when Warp quits; `restore` shows it
+again. A background agent with no pane and no turn running is stopped after 2 hours
+(`--idle-hours H` or `WARP_AGENT_IDLE_HOURS`; `0` never). `detach <id>` leaves an
+agent running without a pane; `view <id>` shows it in any terminal. Restarting the
+Mac ends every agent; conversations still resume. `warp-agent prune` lists the
+folders of sessions that ended over a week ago, and deletes them with `--yes`.
 
 - `--agent codex` runs Codex instead of Claude Code.
 - `--window` opens a new Warp window; `--split <id>` opens beside another session.

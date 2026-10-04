@@ -84,6 +84,7 @@ def create_session(args, prompt: str, group: str | None, tab_title: str | None =
         "fork": _fork_source(args),
         "notify": not args.no_notify,
         "idle_hours": args.idle_hours if args.idle_hours is not None else DEFAULT_IDLE_HOURS,
+        "background": bool(getattr(args, "background", False)),
         "created_at": time.time(),
     }
     if args.agent == "claude":
@@ -108,18 +109,28 @@ def agent_argv(session: state.Session) -> list[str]:
     prompt = (session.dir / "prompt.txt").read_text()
     fork = meta.get("fork") or {}
     bypass = meta["permissions"] == "bypass"
+    resuming = meta.get("resumed_at") is not None
+    if resuming:
+        prompt = ""
     if meta["agent"] == "claude":
         argv = ["claude"]
-        if fork.get("claude_session_id"):
-            argv += ["--resume", fork["claude_session_id"], "--fork-session"]
-        argv += ["--session-id", meta["claude_session_id"], "--name", meta["title"],
+        if resuming:
+            argv += ["--resume", meta["claude_session_id"]]
+        elif fork.get("claude_session_id"):
+            argv += ["--resume", fork["claude_session_id"], "--fork-session",
+                     "--session-id", meta["claude_session_id"]]
+        else:
+            argv += ["--session-id", meta["claude_session_id"]]
+        argv += ["--name", meta["title"],
                  "--settings", str(hooks.claude_settings(session.dir / "claude-settings.json"))]
         argv += ["--dangerously-skip-permissions"] if bypass else ["--permission-mode", "default"]
         if meta.get("model"):
             argv += ["--model", meta["model"]]
     else:
         argv = ["codex"]
-        if fork.get("codex_session_id"):
+        if resuming:
+            argv += ["resume", meta["codex_session_id"]]
+        elif fork.get("codex_session_id"):
             argv += ["fork", fork["codex_session_id"]]
         elif fork.get("codex_last"):
             argv += ["fork", "--last"]
@@ -252,7 +263,12 @@ def cmd_go(args) -> int:
 
 
 def record_pane(session_id: str) -> None:
-    """Remember the Warp pane now showing the session, so `focus` and groups can find it."""
+    """Remember the Warp pane now showing the session, so `focus`, groups and resuming
+    in a restored pane can find it."""
+    pane_uuid = os.environ.get("WARP_TERMINAL_SESSION_UUID")
+    if pane_uuid:
+        index = state.panes_dir() / pane_uuid
+        index.write_text(session_id)
     state.write_json(state.session_dir(session_id) / "pane.json", {
         "focus_url": os.environ.get("WARP_FOCUS_URL"),
         "warp_session_uuid": os.environ.get("WARP_TERMINAL_SESSION_UUID"),
@@ -346,8 +362,10 @@ def cmd_serve(args) -> int:
         proc["viewer"] = connected
         save()
 
-    def on_pane_closed():
-        proc["ended_by"] = "pane closed in Warp"
+    def on_pane_closed(warp_running):
+        proc["ended_by"] = "pane closed in Warp" if warp_running else "Warp quit"
+        # A session whose Warp quit resumes when Warp restores its pane.
+        proc["resumable"] = not warp_running
         save()
 
     hours = session.meta.get("idle_hours", DEFAULT_IDLE_HOURS)
@@ -371,7 +389,51 @@ def cmd_serve(args) -> int:
                          on_output=TrustPromptWatcher(session), on_viewer=on_viewer,
                          on_pane_closed=on_pane_closed, idle_limit=hours * 3600,
                          is_busy=is_busy, on_idle_stop=on_idle_stop,
+                         keep_running=session.meta.get("background", False),
                          winsize=(args.rows, args.cols))
+
+
+def prepare_resume(session: state.Session) -> None:
+    """Point the session at its saved conversation so the next start resumes it."""
+    meta = session.meta
+    if session.alive():
+        raise SystemExit(f"warp-agent: {session.id} is still running; use `warp-agent view {session.id}`")
+    if meta["agent"] == "codex":
+        codex_id = session.status.get("agent_session_id")
+        if not codex_id:
+            raise SystemExit(f"warp-agent: {session.id} never reported a Codex session to resume")
+        meta["codex_session_id"] = codex_id
+    meta["resumed_at"] = time.time()
+    state.write_json(session.dir / "meta.json", meta)
+    (session.dir / "proc.json").unlink(missing_ok=True)
+    state.update_status(session.id, state="starting", detail="resuming", last_message=None)
+
+
+def cmd_resume(args) -> int:
+    """Resume a session's conversation, in this pane or (--tab) a new tab in its group."""
+    session = state.resolve(args.id)
+    prepare_resume(session)
+    if args.tab or not os.environ.get("WARP_FOCUS_URL"):
+        place_tab(warp.TAB_CONFIG_PREFIX + session.id + "-resume",
+                  [{"directory": session.meta["dir"], "command": run_command(session, False)}],
+                  session.meta["tab_title"], session.meta.get("group"), False, session)
+        print(session.id)
+        return 0
+    os.execv("/bin/zsh", ["/bin/zsh", str(session.dir / "run")])
+
+
+def cmd_resumable(args) -> int:
+    """For the shell hook: print the session to resume in this restored pane, if any."""
+    pane_uuid = os.environ.get("WARP_TERMINAL_SESSION_UUID", "")
+    index = state.panes_dir() / pane_uuid
+    try:
+        session = state.Session(index.read_text().strip())
+    except (OSError, KeyError):
+        return 1
+    if session.alive() or not session.proc.get("resumable"):
+        return 1
+    print(session.id)
+    return 0
 
 
 def cmd_restore(args) -> int:
@@ -380,9 +442,17 @@ def cmd_restore(args) -> int:
     A session goes back into the pane it last used when Warp restored that pane;
     otherwise it opens in a new tab in its group.
     """
-    detached = [s for s in state.Session.all() if s.alive() and not s.proc.get("viewer")]
+    sessions = state.Session.all()
+    for session in sessions:
+        if not session.alive() and session.proc.get("resumable"):
+            # Warp did not restore its pane (or the shell hook is not installed).
+            prepare_resume(session)
+            place_tab(warp.TAB_CONFIG_PREFIX + session.id + "-resume",
+                      [{"directory": session.meta["dir"], "command": run_command(session, False)}],
+                      session.meta["tab_title"], session.meta.get("group"), False, session)
+            print(f"{session.id}: resumed in a new tab")
+    detached = [s for s in sessions if s.alive() and not s.proc.get("viewer")]
     if not detached:
-        print("every running session is already shown in Warp")
         return 0
     for session in detached:
         meta = session.meta
@@ -568,7 +638,8 @@ def cmd_ls(args) -> int:
             continue
         rows.append({
             "id": session.id, "agent": meta.get("agent"), "group": meta.get("group") or "",
-            "state": status.get("state") if alive or status.get("state") == "exited" else "gone",
+            "state": (status.get("state") if alive else "resumable" if session.proc.get("resumable")
+                      else "exited" if status.get("state") == "exited" else "gone"),
             "shown": bool(session.proc.get("viewer")) if alive else None,
             "detail": status.get("detail") or "",
             "updated": _age(now - status.get("updated_at", now)), "dir": meta.get("dir"),
@@ -628,6 +699,9 @@ def _launch_options(parser):
     parser.add_argument("--keep-pane", action="store_true",
                         help="keep the pane open after the agent exits")
     parser.add_argument("--no-notify", action="store_true")
+    parser.add_argument("--background", action="store_true",
+                        help="keep the agent running when Warp quits (default: stop it and "
+                             "resume the conversation when Warp restores the pane)")
     parser.add_argument("--idle-hours", type=float, metavar="H",
                         help="stop the agent after H hours with no pane and no turn running "
                              "(default: $WARP_AGENT_IDLE_HOURS or 2; 0 never)")
@@ -711,6 +785,12 @@ def build_parser() -> argparse.ArgumentParser:
     view = sub.add_parser("view", help="show a running session in this terminal")
     view.add_argument("id")
     view.set_defaults(func=cmd_view)
+
+    resume = sub.add_parser("resume", help="resume a session's conversation")
+    resume.add_argument("id")
+    resume.add_argument("--tab", action="store_true", help="in a new tab in its group")
+    resume.set_defaults(func=cmd_resume)
+    sub.add_parser("_resumable").set_defaults(func=cmd_resumable)
 
     restore = sub.add_parser("restore", help="show running sessions again after Warp restarts")
     restore.set_defaults(func=cmd_restore)

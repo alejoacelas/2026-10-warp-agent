@@ -36,6 +36,13 @@ def sessions_dir() -> Path:
     return path
 
 
+def panes_dir() -> Path:
+    """Index of Warp pane IDs (WARP_TERMINAL_SESSION_UUID) to the session last shown there."""
+    path = home() / "panes"
+    path.mkdir(exist_ok=True)
+    return path
+
+
 def session_dir(session_id: str) -> Path:
     return sessions_dir() / session_id
 
