@@ -118,9 +118,8 @@ def agent_argv(session: state.Session) -> list[str]:
             argv += ["fork", fork["codex_session_id"]]
         elif fork.get("codex_last"):
             argv += ["fork", "--last"]
-        argv += hooks.codex_overrides() + ["--dangerously-bypass-hook-trust",
-                                           "-c", f"projects.{json.dumps(meta['dir'])}.trust_level=\"trusted\""]
-        argv += ["--dangerously-bypass-approvals-and-sandbox"] if bypass else ["-a", "untrusted"]
+        argv += hooks.codex_overrides() + ["--dangerously-bypass-hook-trust"]
+        argv += ["--dangerously-bypass-approvals-and-sandbox"] if bypass else ["-a", "on-request", "-s", "read-only"]
         if meta.get("model"):
             argv += ["-m", meta["model"]]
     if prompt.strip():
@@ -234,18 +233,28 @@ def cmd_attach(args) -> int:
 
 
 class TrustPromptWatcher:
-    """Answer Claude Code's folder-trust prompt for the directory the user chose.
+    """Handle the folder-trust prompt Claude Code and Codex show in a new directory.
 
     The prompt appears before any hook runs, so nothing else would report it.
+    In the default mode (approvals bypassed) it is accepted for the directory the
+    user chose; with --ask-permissions it is reported as waiting for a person.
     Terminal output draws spaces with cursor moves, so matching ignores whitespace.
-    With --ask-permissions the prompt is left for a person and reported as waiting.
     """
 
-    YES = "Yes,Itrustthisfolder"
+    # (text that identifies the prompt, keys that accept it given the screen so far)
+    PROMPTS = {
+        "claude": ("Yes,Itrustthisfolder",
+                   lambda screen: ["down", "enter"]
+                   if screen.rfind("❯No,exit") > screen.rfind("❯Yes,Itrustthisfolder") else ["enter"]),
+        "codex": ("1.Trustandcontinue",
+                  lambda screen: ["enter"] if screen.rfind("›1.Trustandcontinue") >= 0 else ["1"]),
+    }
 
     def __init__(self, session: state.Session):
         self.session = session
-        self.auto = session.meta.get("permissions") == "bypass" and session.meta.get("agent") == "claude"
+        meta = session.meta
+        self.marker, self.accept = self.PROMPTS[meta["agent"]]
+        self.auto = meta.get("permissions") == "bypass"
         self.buffer = ""
         self.done = False
 
@@ -254,14 +263,13 @@ class TrustPromptWatcher:
             return None
         text = transcripts.ANSI.sub(b"", data).decode("utf-8", "replace")
         self.buffer = (self.buffer + "".join(text.split()))[-4000:]
-        if self.YES not in self.buffer:
+        if self.marker not in self.buffer:
             return None
         self.done = True
         if not self.auto:
             state.update_status(self.session.id, state="waiting", detail="folder trust prompt")
             return None
-        on_no = self.buffer.rfind("❯No,exit") > self.buffer.rfind("❯" + self.YES)
-        return ["down", "enter"] if on_no else ["enter"]
+        return self.accept(self.buffer)
 
 
 def cmd_wrap(args) -> int:
