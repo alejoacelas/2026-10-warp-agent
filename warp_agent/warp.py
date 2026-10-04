@@ -264,6 +264,8 @@ def recognize_text(image: Path) -> list[dict]:
     return json.loads(out.stdout)
 
 
+# Letters text recognition swaps with digits in IDs such as "0dc0" read as "odco".
+_DIGIT_LOOKALIKES = str.maketrans({"o": "0", "l": "1", "i": "1"})
 _CONFUSABLES = str.maketrans({"е": "e", "а": "a", "о": "o", "р": "p", "с": "c", "х": "x", "і": "i"})
 
 
@@ -275,8 +277,10 @@ def normalize(text: str) -> str:
 def match_name(candidates, name: str, cutoff: float = 0.85) -> str | None:
     """Best fuzzy match for a name read by text recognition, which can drop or swap a character."""
     import difflib
-    found = difflib.get_close_matches(normalize(name), list(candidates), n=1, cutoff=cutoff)
-    return found[0] if found else None
+    fold = lambda text: normalize(text).translate(_DIGIT_LOOKALIKES)
+    folded = {fold(c): c for c in candidates}
+    found = difflib.get_close_matches(fold(name), list(folded), n=1, cutoff=cutoff)
+    return folded[found[0]] if found else None
 
 
 def sidebar_visible(lines: list[dict], scale: float = 1.0) -> bool:

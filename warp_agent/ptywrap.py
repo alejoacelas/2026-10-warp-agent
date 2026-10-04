@@ -240,6 +240,7 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
     def drop_viewer():
         nonlocal viewer, viewer_buffer
         if viewer is not None:
+            print(f"{time.ctime()}: viewer disconnected", file=sys.stderr, flush=True)
             viewer.close()
             viewer, viewer_buffer = None, b""
             if on_viewer:
