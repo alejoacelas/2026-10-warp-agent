@@ -261,6 +261,7 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
             elif kind == b"H" and len(payload) == 4:
                 nonlocal close_check
                 close_check = (time.monotonic() + CLOSE_GRACE, struct.unpack(">I", payload)[0])
+                print(f"{time.ctime()}: viewer hung up inside Warp pid {close_check[1]}", file=sys.stderr, flush=True)
 
     try:
         while True:
@@ -282,6 +283,8 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
             if close_check and close_check[0] <= now:
                 app_pid = close_check[1]
                 close_check = None
+                print(f"{time.ctime()}: after hang-up, viewer={'yes' if viewer else 'no'}, "
+                      f"Warp pid {app_pid} alive={_pid_alive(app_pid)}", file=sys.stderr, flush=True)
                 if viewer is None and _pid_alive(app_pid):
                     # Warp is still running, so the user closed the pane: end the agent.
                     if on_pane_closed:
@@ -387,7 +390,8 @@ def serve(argv: list[str], inbox: Path, log_path: Path, socket_path: Path | None
 
 def run(argv, inbox, log_path, on_start=None, on_exit=None, on_output=None, winsize=None) -> int:
     """Run argv under a PTY with no viewer (used by tests and scripted runs)."""
-    return serve(argv, inbox, log_path, None, on_start, on_exit, on_output, None, winsize)
+    return serve(argv, inbox, log_path, None, on_start=on_start, on_exit=on_exit,
+                 on_output=on_output, winsize=winsize)
 
 
 def view(socket_path: Path, connect_timeout: float = 15.0) -> int:

@@ -145,7 +145,7 @@ class LiveWarpTest(unittest.TestCase):
                             for m in members if not m.endswith("main")]
         return result
 
-    def test_1_claude_in_new_group_fixes_bug(self):
+    def test_01_claude_in_new_group_fixes_bug(self):
         sid = self.launch("fix", "--window", "--group", self.group_a, "--dir", str(self.stats),
                           "--name", "live-fix",
                           "The median test fails. Fix stats.py so all tests pass, run them, and commit. "
@@ -155,7 +155,7 @@ class LiveWarpTest(unittest.TestCase):
         self.assertTrue(unit_tests_pass(self.stats))
         self.assertIn(sid, self.sidebar(sid)[self.group_a])
 
-    def test_2_follow_up_reaches_the_same_session(self):
+    def test_02_follow_up_reaches_the_same_session(self):
         sid = self.sessions["fix"]
         wa("send", sid, "Now add mode(values) returning the most common value (smallest on ties) with a test, "
                         "run the tests, commit, and reply with the short commit hash only.")
@@ -165,7 +165,7 @@ class LiveWarpTest(unittest.TestCase):
         self.assertIn("def mode", (self.stats / "stats.py").read_text())
         self.assertTrue(unit_tests_pass(self.stats))
 
-    def test_3_codex_joins_the_existing_group(self):
+    def test_03_codex_joins_the_existing_group(self):
         sid = self.launch("wc", "--agent", "codex", "--group", self.group_a, "--dir", str(self.wc),
                           "--name", "live-wc",
                           "Make wc.py strip punctuation so 'dog.' and 'dog' are one word, and add --top N to print "
@@ -178,7 +178,7 @@ class LiveWarpTest(unittest.TestCase):
         self.assertIn(self.sessions["fix"], members)
         self.assertIn(sid, members)
 
-    def test_4_two_agents_as_panes_in_a_second_group(self):
+    def test_04_two_agents_as_panes_in_a_second_group(self):
         manifest = self.root / "panes.json"
         manifest.write_text(json.dumps([
             {"agent": "claude", "dir": str(self.stats), "name": "live-pane-claude",
@@ -196,7 +196,7 @@ class LiveWarpTest(unittest.TestCase):
         self.assertEqual(groups[self.group_b], [title])
         self.assertIn(self.group_a, groups)
 
-    def test_5_split_an_existing_pane(self):
+    def test_05_split_an_existing_pane(self):
         target = self.sessions["wc"]
         sid = self.launch("readme", "--split", target, "--dir", str(self.wc), "--name", "live-readme",
                           "Write README.md documenting wc.py's options with one real example each, then commit.")
@@ -207,7 +207,7 @@ class LiveWarpTest(unittest.TestCase):
                                 'front window of process "stable"'], capture_output=True, text=True).stdout.strip()
         self.assertEqual(front, state.Session(target).meta["tab_title"])
 
-    def test_6_permission_prompts_are_reported_and_answerable(self):
+    def test_06_permission_prompts_are_reported_and_answerable(self):
         sid = self.launch("perm", "--ask-permissions", "--group", self.group_b, "--dir", str(self.perm),
                           "--name", "live-perm",
                           "Write the output of the date command to notes.txt and commit it.")
@@ -222,7 +222,7 @@ class LiveWarpTest(unittest.TestCase):
             self.assertTrue(result.startswith("WAITING"), result)
         self.assertIn("notes.txt", git(self.perm, "show", "--stat", "--format=", "HEAD"))
 
-    def test_7_fork_remembers_the_original_conversation(self):
+    def test_07_fork_remembers_the_original_conversation(self):
         sid = self.launch("fork", "--fork", self.sessions["fix"], "--group", self.group_a, "--dir", str(self.stats),
                           "--name", "live-fork",
                           "Without running commands or reading files: which function did you fix first, and "
@@ -232,14 +232,14 @@ class LiveWarpTest(unittest.TestCase):
         events = (state.session_dir(sid) / "events.jsonl").read_text().splitlines()
         self.assertFalse([e for e in events if json.loads(e).get("tool_name")])
 
-    def test_8_stop_ends_the_process_and_closes_the_tab(self):
+    def test_08_stop_ends_the_process_and_closes_the_tab(self):
         sid = self.sessions["fork"]
         child = state.Session(sid).proc["child_pid"]
         wa("stop", sid)
         self.assertFalse(state.pid_alive(child))
         self.assertNotIn(sid, self.sidebar(self.sessions["fix"])[self.group_a])
 
-    def test_9_closing_the_pane_ends_the_agent(self):
+    def test_09_closing_the_pane_ends_the_agent(self):
         sid = self.sessions["readme"]
         session = state.Session(sid)
         child = session.proc["child_pid"]
@@ -247,10 +247,12 @@ class LiveWarpTest(unittest.TestCase):
         # Cmd+W, then Return on Warp's "Close pane? You have 1 process running" dialog.
         warp.send_keys([("key", "w", ["command"]), ("delay", 0.8), ("code", warp.RETURN)],
                        session.meta["tab_title"])
-        deadline = time.monotonic() + 15
+        # Warp keeps a closed pane for 60 s so Cmd+Shift+T can reopen it
+        # (general.undo_close.grace_period); then it hangs up, and the server waits 5 s.
+        deadline = time.monotonic() + 90
         while state.pid_alive(child):
             self.assertLess(time.monotonic(), deadline, "agent still running after its pane closed")
-            time.sleep(0.5)
+            time.sleep(1)
         self.assertEqual(state.Session(sid).status["detail"], "pane closed in Warp")
 
     def test_10_restore_shows_a_session_that_lost_its_pane(self):
