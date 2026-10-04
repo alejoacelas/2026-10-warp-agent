@@ -1,3 +1,4 @@
 reference/
 .env
 __pycache__/
+scratch/
