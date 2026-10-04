@@ -11,13 +11,15 @@
 - [Hooks and transcripts are the source of status and replies](#hooks-and-transcripts).
 - [Hooks are passed per launch, never installed globally](#per-launch-hooks).
 - [A PTY wrapper carries follow-up messages and answers trust prompts](#pty-wrapper).
+- [Agents run under a background server and survive quitting Warp](#background-server).
+- [Closing a pane ends its agent; quitting Warp does not](#close-versus-quit).
 
 ### Keep both apps working
 - [`supervise-workers` keeps an Orca track and adds a Warp track](#two-tracks).
 
 ### Test against reality
 - [Real agents, realistic tasks, no tautological tests](#real-tests).
-- [Check placement with screenshots, not Warp's database](#screenshot-verification).
+- [Check placement with screenshots](#screenshot-verification).
 
 ## Details
 
@@ -55,6 +57,22 @@ and people can still type. The folder-trust prompt appears before any hook runs,
 so the wrapper also watches output for it: it accepts in the default (approvals
 bypassed) mode and reports `waiting` with `--ask-permissions`.
 
+### Background server
+Asked for on 2026-10-04 so agents survive quitting Warp. The server owns the agent's
+terminal; panes run viewers. It waits for the first viewer before starting the
+agent, so the agent's startup queries to the terminal get answers, and replays the
+terminal modes the agent switched on (alternate screen, bracketed paste, mouse,
+keyboard protocol) to each new viewer. Without the replay a re-attached pane shows
+a garbled screen and misreads keys.
+
+### Close versus quit
+Closing a pane is how the user ends a finished session, so it must stop the agent,
+or idle agents pile up at 200–500 MB each. Quitting Warp must not. Both end the
+viewer, and Warp does not reliably hang it up, so the viewer reports its Warp
+process when it connects and the server checks, 5 s after any viewer loss it did
+not cause, whether that Warp is still running. `detach` is the deliberate way to
+leave an agent running without a pane.
+
 ### Two tracks
 The user runs agents in both Orca and Warp; the skill chooses by environment.
 
@@ -64,11 +82,11 @@ and assertions only on outcomes produced by Warp, agents or the OS. Fixtures com
 from real runs with tool output removed, since it can contain private files.
 
 ### Screenshot verification
-Warp writes `warp.sqlite` only when session restore is on, and the user keeps
-`restore_session = false`; Warp's accessibility tree is a single text area. Placement
-is therefore checked by reading the vertical tabs sidebar from a screenshot with
-macOS text recognition. Changing the user's restore setting to enable database
-checks was rejected because it changes Warp's behavior at every restart.
+Warp's accessibility tree is a single text area, so placement is checked by reading
+the vertical tabs sidebar from a screenshot with macOS text recognition. Warp's
+`warp.sqlite` is written only with session restore on, which the user turned on
+on 2026-10-04 to get tabs back after restarts; database checks could now
+complement screenshots but are not built.
 
 ## Decision log
 
@@ -76,3 +94,5 @@ checks was rejected because it changes Warp's behavior at every restart.
   Warp skills.
 - 2026-10-04: Built and verified live: per-launch hooks, trust-prompt handling,
   screenshot verification.
+- 2026-10-04: Background server so agents survive quitting Warp; closing a pane ends
+  its agent after Warp's 60 s undo window plus 5 s.
