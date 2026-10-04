@@ -36,8 +36,11 @@ Warp is AGPL and changes fast. Its control CLI deliberately excludes running
 commands and reading output, so a fork carrying those would never merge upstream.
 
 ### Hooks and transcripts
-Claude Code and Codex hooks report status independently of the terminal app.
-Transcripts give the exact last reply. Orca relies on the same signal.
+Claude Code and Codex hooks report status independently of the terminal app;
+Orca relies on the same signal. The reply for a finished turn comes from the Stop
+event's `last_assistant_message`, not the transcript: Claude can run its Stop hook
+before writing the final message to the transcript, which made `wait` print the
+previous turn's reply in a live run. Transcripts are the fallback.
 
 ### Per-launch hooks
 Claude gets hooks through `--settings`; Codex through `-c` overrides with

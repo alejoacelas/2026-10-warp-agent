@@ -1,6 +1,6 @@
 """End-to-end checks with real Claude Code and Codex sessions in the running Warp app.
 
-Opt in with WARP_AGENT_LIVE=1. Takes about 10 minutes and uses the agents'
+Opt in with WARP_AGENT_LIVE=1. Takes about 2 minutes and uses the agents'
 default models. It opens a new Warp window, creates two tab groups, and needs
 Accessibility access for Warp (group creation and pane splitting use keystrokes).
 Avoid typing in Warp while it runs: keystroke steps abort if focus moves.

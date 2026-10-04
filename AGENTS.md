@@ -49,7 +49,8 @@ Source references are to `reference/warp`.
   `--dangerously-bypass-hook-trust`. Codex fires `SessionStart` only with the first turn.
 - Both agents show a folder-trust prompt in new directories before any hook runs.
   The wrapper's `TrustPromptWatcher` accepts it in the default mode and reports
-  `waiting` with `--ask-permissions`.
+  `waiting` with `--ask-permissions`. It strips escape sequences from the joined
+  output tail, because sequences can span two reads.
 - Codex 0.160 accepts only `on-request` and `never` approval policies; ask mode uses
   `-a on-request -s read-only`.
 
@@ -59,7 +60,7 @@ Source references are to `reference/warp`.
   transcripts and Warp screenshots from real runs, and the PTY wrapper driving a real
   child process.
 - `WARP_AGENT_LIVE=1 python3 -m unittest tests.test_live -v` runs real Claude Code and
-  Codex sessions in the live Warp app (about 10 minutes, default models). It opens a
+  Codex sessions in the live Warp app (about 2 minutes, default models). It opens a
   new window and two groups; avoid typing in Warp while it runs.
 - Test with real agents on their default models, on realistic tasks. Write no
   tautological tests: every assertion checks an outcome produced by an agent, Warp
