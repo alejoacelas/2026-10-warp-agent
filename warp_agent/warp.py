@@ -170,23 +170,59 @@ def send_keys(steps: list[tuple], expected_title: str | None) -> None:
 RETURN = 36
 
 
+KEYBINDINGS = Path.home() / ".warp" / "keybindings.yaml"
+GROUP_ACTION = "workspace:new_tab_group_from_active_or_selected_tabs"
+GROUP_CHORD = ("g", ["control", "option", "command"])  # ctrl-alt-cmd-g in keybindings.yaml
+
+
+def _warp_started_at() -> float | None:
+    out = subprocess.run(["ps", "-axo", "pid=,lstart=,comm="], capture_output=True, text=True,
+                         env={**os.environ, "LC_ALL": "C"}).stdout
+    for line in out.splitlines():
+        if line.rstrip().endswith("/Warp.app/Contents/MacOS/stable"):
+            started = " ".join(line.split()[1:6])
+            return time.mktime(time.strptime(started, "%a %b %d %H:%M:%S %Y"))
+    return None
+
+
+def group_chord_loaded() -> bool:
+    """True if keybindings.yaml binds the group action and Warp started after it was written."""
+    try:
+        if f'"{GROUP_ACTION}": ctrl-alt-cmd-g' not in KEYBINDINGS.read_text():
+            return False
+        written = KEYBINDINGS.resolve().stat().st_mtime
+    except OSError:
+        return False
+    started = _warp_started_at()
+    return started is not None and started > written
+
+
 def create_group_from_active_tab(name: str, expected_title: str) -> None:
-    """Run "Create tab group from active tab" from the command palette and name it."""
+    """Put the active tab in a new tab group and name it.
+
+    Uses the ctrl-alt-cmd-g binding when Warp has loaded it (about 0.5 s of
+    keystrokes); otherwise the command palette (about 3 s).
+    """
     if not SAFE_TYPING.match(name):
         raise WarpError(f"group names may use letters, digits, spaces and . _ - only: {name!r}")
-    send_keys([
-        ("key", "p", ["command"]), ("delay", 0.6),
-        ("text", "Create tab group from active"), ("delay", 0.8),
-        ("code", RETURN), ("delay", 0.8),
-        ("key", "a", ["command"]), ("text", name), ("delay", 0.2),
-        ("code", RETURN),
-    ], expected_title)
+    if group_chord_loaded():
+        opening = [("key", GROUP_CHORD[0], GROUP_CHORD[1]), ("delay", 0.4)]
+    else:
+        opening = [("key", "p", ["command"]), ("delay", 0.6),
+                   ("text", "Create tab group from active"), ("delay", 0.8),
+                   ("code", RETURN), ("delay", 0.8)]
+    send_keys(opening + [("key", "a", ["command"]), ("text", name), ("delay", 0.2),
+                         ("code", RETURN)], expected_title)
+
+
+SPLIT_SETTLE = float(os.environ.get("WARP_AGENT_SPLIT_SETTLE", "1.0"))
 
 
 def split_and_run(command: str, expected_title: str, direction: str = "right") -> None:
+    """Split the focused pane, wait for the new pane to take input, and run a command."""
     modifiers = ["command"] if direction == "right" else ["command", "shift"]
     send_keys([
-        ("key", "d", modifiers), ("delay", 1.0),
+        ("key", "d", modifiers), ("delay", SPLIT_SETTLE),
         ("text", command), ("code", RETURN),
     ], expected_title)
 
@@ -241,6 +277,11 @@ def match_name(candidates, name: str, cutoff: float = 0.85) -> str | None:
     import difflib
     found = difflib.get_close_matches(normalize(name), list(candidates), n=1, cutoff=cutoff)
     return found[0] if found else None
+
+
+def sidebar_visible(lines: list[dict], scale: float = 1.0) -> bool:
+    """The vertical tabs panel shows a "Search tabs..." box at its top left."""
+    return any(l["x"] < 120 * scale and "search tabs" in normalize(l["text"]) for l in lines)
 
 
 def sidebar_groups(lines: list[dict], scale: float = 1.0) -> dict[str, list[str]]:

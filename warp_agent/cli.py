@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import signal
 import sys
 import time
@@ -139,21 +140,35 @@ def wait_attached(session: state.Session, timeout: float = ATTACH_TIMEOUT) -> di
     raise SystemExit(f"warp-agent: session {session.id} did not start in Warp within {timeout:.0f}s")
 
 
-def run_command(session: state.Session, keep_pane: bool) -> str:
-    command = str(session.dir / "run")
-    return command if keep_pane else f"{command}; exit"
+def run_command(session: state.Session, keep_pane: bool, typed: bool = False) -> str:
+    """The command a pane runs to start the session.
+
+    Typed commands (for splits) are kept short to shrink the keystroke window, so
+    they rely on `warp-agent` being on PATH. `exec` makes the pane close when the
+    agent exits.
+    """
+    program = "warp-agent" if typed and shutil.which("warp-agent") else str(BIN)
+    command = f"{program} go {session.id}"
+    return command if keep_pane else f"exec {command}"
 
 
 def find_anchor(group: str) -> state.Session | None:
-    """Focus a live member of the group and return it, or None if none can be focused."""
-    for member_id in reversed(state.load_groups().get(group, {}).get("members", [])):
+    """Focus a pane of the group and return its session, or None if none can be focused.
+
+    Members whose agent is still running come first. A member whose agent has
+    ended can still anchor the group when its pane survives, as with tabs Warp
+    restores after a restart; the window-title check confirms the focus landed.
+    """
+    members = []
+    for member_id in state.load_groups().get(group, {}).get("members", []):
         try:
-            member = state.Session(member_id)
+            members.append(state.Session(member_id))
         except KeyError:
             continue
-        if not member.alive() or not member.pane.get("focus_url"):
-            continue
-        if warp.focus(member.pane["focus_url"], member.meta["tab_title"]):
+    members.sort(key=lambda m: (m.alive(), m.meta.get("created_at", 0)), reverse=True)
+    for member in members[:8]:
+        url = member.pane.get("focus_url")
+        if url and warp.focus(url, member.meta["tab_title"], timeout=1.5):
             return member
     return None
 
@@ -181,7 +196,8 @@ def cmd_new(args) -> int:
         session = create_session(args, prompt, target.meta.get("group"), target.meta["tab_title"])
         if not target.alive() or not warp.focus(target.pane["focus_url"], target.meta["tab_title"]):
             raise SystemExit(f"warp-agent: could not focus {target.id} to split it")
-        warp.split_and_run(run_command(session, args.keep_pane), target.meta["tab_title"], args.direction)
+        warp.split_and_run(run_command(session, args.keep_pane, typed=True), target.meta["tab_title"],
+                           args.direction)
         wait_attached(session)
     else:
         session = create_session(args, prompt, args.group)
@@ -223,6 +239,12 @@ def cmd_panes(args) -> int:
 
 
 # Running inside Warp ------------------------------------------------------------
+
+def cmd_go(args) -> int:
+    """Start a session inside the current pane (what tab configs and splits run)."""
+    run = state.session_dir(args.id) / "run"
+    os.execv("/bin/zsh", ["/bin/zsh", str(run)])
+
 
 def cmd_attach(args) -> int:
     session_id = os.environ["WARP_AGENT_ID"]
@@ -451,8 +473,15 @@ def cmd_shot(args) -> int:
     if not args.window and session.alive():
         # A window's title is its active tab's title, so bring the session's tab forward.
         warp.focus(session.pane["focus_url"], session.meta["tab_title"])
-    scale = warp.screenshot(args.window or session.meta["tab_title"], out)
-    groups = warp.sidebar_groups(warp.recognize_text(out), scale)
+    title = args.window or session.meta["tab_title"]
+    scale = warp.screenshot(title, out)
+    lines = warp.recognize_text(out)
+    if not warp.sidebar_visible(lines, scale):
+        # Some windows open with the vertical tabs panel closed; Cmd+Shift+B toggles it.
+        warp.send_keys([("key", "b", ["command", "shift"]), ("delay", 0.6)], title)
+        scale = warp.screenshot(title, out)
+        lines = warp.recognize_text(out)
+    groups = warp.sidebar_groups(lines, scale)
     print(json.dumps({"screenshot": str(out), "groups": groups}, indent=2))
     return 0
 
@@ -542,6 +571,9 @@ def build_parser() -> argparse.ArgumentParser:
     hook = sub.add_parser("hook")
     hook.add_argument("agent", choices=["claude", "codex"])
     hook.set_defaults(func=cmd_hook)
+    go = sub.add_parser("go", help="start a prepared session in this pane (used by launches)")
+    go.add_argument("id")
+    go.set_defaults(func=cmd_go)
     sub.add_parser("_attach").set_defaults(func=cmd_attach)
     sub.add_parser("_wrap").set_defaults(func=cmd_wrap)
     return parser

@@ -124,6 +124,13 @@ class SidebarTest(unittest.TestCase):
         found = warp.sidebar_groups(warp.recognize_text(FIXTURES / name), scale)
         return {group: [m for m in members if not m.endswith("main")] for group, members in found.items()}
 
+    def test_detects_a_window_whose_sidebar_is_closed(self):
+        scale = 1400 / 1280
+        hidden = warp.recognize_text(FIXTURES / "sidebar-hidden-1400px.png")
+        shown = warp.recognize_text(FIXTURES / "sidebar-pair-1400px.png")
+        self.assertFalse(warp.sidebar_visible(hidden, scale))
+        self.assertTrue(warp.sidebar_visible(shown, scale))
+
     def test_two_groups_at_reduced_size(self):
         groups = self.groups("sidebar-pair-1400px.png", 1400 / 1280)
         self.assertEqual(groups["wa-test"], ["stats-fix-ac68", "wc-top-9eb8"])

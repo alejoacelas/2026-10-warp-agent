@@ -10,6 +10,15 @@ linked into `~/.local/bin`) and the Warp track of the `supervise-workers` skill 
 picks the track from the environment: `TERM_PROGRAM=WarpTerminal` means Warp,
 `ORCA_TERMINAL_HANDLE` means Orca.
 
+## Moving this repository
+
+Absolute paths point into this checkout: the `~/.local/bin/warp-agent` link, and each
+running session's `run` script and `claude-settings.json` in
+`~/.local/state/warp-agent/sessions/`. Stop running sessions first (`warp-agent ls`,
+`warp-agent stop`), move the repository, then re-create the link:
+`ln -sf <new path>/bin/warp-agent ~/.local/bin/warp-agent`. Update the `supervise-workers`
+skill's link to this repository too.
+
 ## Layout
 
 - `warp_agent/cli.py`: commands (`new`, `panes`, `wait`, `read`, `send`, `focus`,
