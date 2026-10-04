@@ -73,7 +73,7 @@ def locked(path: Path):
 
 
 def update_status(session_id: str, /, **fields) -> dict:
-    """Merge fields into status.json; a changed `state` bumps `seq`."""
+    """Merge fields into status.json (None removes a field); a changed `state` bumps `seq`."""
     directory = session_dir(session_id)
     with locked(directory / "status.lock"):
         status = read_json(directory / "status.json", {"seq": 0})
@@ -82,7 +82,11 @@ def update_status(session_id: str, /, **fields) -> dict:
         elif fields.get("bump"):
             status["seq"] = status.get("seq", 0) + 1
         fields.pop("bump", None)
-        status.update({k: v for k, v in fields.items() if v is not None})
+        for key, value in fields.items():
+            if value is None:
+                status.pop(key, None)
+            else:
+                status[key] = value
         status["updated_at"] = time.time()
         write_json(directory / "status.json", status)
         return status

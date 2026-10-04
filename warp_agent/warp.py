@@ -245,19 +245,20 @@ def sidebar_groups(lines: list[dict], scale: float = 1.0) -> dict[str, list[str]
     points; terminal text starts past the default 248-point sidebar width.
     """
     rows = sorted((l for l in lines if l["x"] < 200 * scale), key=lambda l: l["y"])
+    is_count = lambda row: re.fullmatch(r"\d+ tabs?", normalize(row["text"])) is not None
+    is_symbol = lambda row: len(re.sub(r"[^0-9a-z]", "", normalize(row["text"]))) < 2
     groups: dict[str, list[str]] = {}
     current = None
     header_x = 0
     for index, row in enumerate(rows):
-        following = rows[index + 1]["text"] if index + 1 < len(rows) else ""
-        if re.fullmatch(r"\d+ tabs?", normalize(following)):
+        if is_count(row) or is_symbol(row):
+            continue
+        following = next((r for r in rows[index + 1:] if not is_symbol(r)), None)
+        if following is not None and is_count(following):
             current = normalize(row["text"])
             header_x = row["x"]
             groups[current] = []
-            continue
-        if re.fullmatch(r"\d+ tabs?", normalize(row["text"])):
-            continue
-        if current is not None:
+        elif current is not None:
             if row["x"] > header_x + 6 * scale:
                 groups[current].append(normalize(row["text"]))
             else:
