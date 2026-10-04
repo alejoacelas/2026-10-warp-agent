@@ -62,6 +62,37 @@ class HookReplayTest(unittest.TestCase):
         self.assertIn("wc.py", final["last_prompt"])
 
 
+class TrustPromptTest(unittest.TestCase):
+    """Claude's folder-trust prompt, as recorded from a session that once stalled on it."""
+
+    def setUp(self):
+        self.home = tempfile.TemporaryDirectory()
+        os.environ["WARP_AGENT_HOME"] = self.home.name
+        self.raw = (FIXTURES / "claude-trust-prompt.bin").read_bytes()
+
+    def tearDown(self):
+        os.environ.pop("WARP_AGENT_HOME", None)
+        self.home.cleanup()
+
+    def watch(self, permissions, chunk):
+        from warp_agent.cli import TrustPromptWatcher
+        state.write_json(state.session_dir("t") / "meta.json",
+                         {"id": "t", "agent": "claude", "permissions": permissions})
+        watcher = TrustPromptWatcher(state.Session("t"))
+        answers = [watcher(self.raw[i:i + chunk]) for i in range(0, len(self.raw), chunk)]
+        return [a for a in answers if a]
+
+    def test_accepts_regardless_of_how_output_is_split(self):
+        # The cursor starts on "No, exit", so accepting means Down then Enter.
+        for chunk in (5, 7, 64, 4096):
+            self.assertEqual(self.watch("bypass", chunk), [["down", "enter"]], chunk)
+
+    def test_ask_mode_reports_waiting_instead(self):
+        self.assertEqual(self.watch("ask", 7), [])
+        status = state.read_json(state.session_dir("t") / "status.json")
+        self.assertEqual((status["state"], status["detail"]), ("waiting", "folder trust prompt"))
+
+
 class TranscriptTest(unittest.TestCase):
     def test_claude_last_reply_is_the_follow_up_answer(self):
         # The second turn asked for "the commit hash only"; the agent answered 0942579.

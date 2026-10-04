@@ -258,14 +258,18 @@ class TrustPromptWatcher:
         meta = session.meta
         self.marker, self.accept = self.PROMPTS[meta["agent"]]
         self.auto = meta.get("permissions") == "bypass"
+        self.raw = b""
         self.buffer = ""
         self.done = False
 
     def __call__(self, data: bytes):
         if self.done:
             return None
-        text = transcripts.ANSI.sub(b"", data).decode("utf-8", "replace")
-        self.buffer = (self.buffer + "".join(text.split()))[-4000:]
+        # Strip escape sequences from the joined tail, not per chunk: a sequence split
+        # across two reads would otherwise leave fragments (like "1C") inside the text.
+        self.raw = (self.raw + data)[-16000:]
+        text = transcripts.ANSI.sub(b"", self.raw).decode("utf-8", "replace")
+        self.buffer = "".join(text.split())
         if self.marker not in self.buffer:
             return None
         self.done = True
