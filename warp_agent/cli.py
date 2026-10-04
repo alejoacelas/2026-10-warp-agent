@@ -8,6 +8,7 @@ import os
 import shlex
 import shutil
 import signal
+import subprocess
 import sys
 import time
 import uuid
@@ -93,8 +94,7 @@ def create_session(args, prompt: str, group: str | None, tab_title: str | None =
         f"export WARP_AGENT_ID={session_id}\n"
         f"export WARP_AGENT_HOME={shlex.quote(str(state.home()))}\n"
         f"cd {shlex.quote(directory)} || exit 1\n"
-        f"{shlex.quote(sys.executable)} {shlex.quote(str(BIN))} _attach\n"
-        f"exec {shlex.quote(sys.executable)} {shlex.quote(str(BIN))} _wrap\n"
+        f"exec {shlex.quote(sys.executable)} {shlex.quote(str(BIN))} _start\n"
     )
     run.chmod(0o700)
     return state.Session(session_id)
@@ -130,11 +130,12 @@ def agent_argv(session: state.Session) -> list[str]:
     return argv
 
 
-def wait_attached(session: state.Session, timeout: float = ATTACH_TIMEOUT) -> dict:
+def wait_attached(session: state.Session, timeout: float = ATTACH_TIMEOUT, since: float = 0.0) -> dict:
+    """Wait until a pane has attached to the session (after `since`, for re-attaching)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         pane = session.pane
-        if pane.get("focus_url"):
+        if pane.get("focus_url") and pane.get("attached_at", 0) >= since:
             return pane
         time.sleep(0.1)
     raise SystemExit(f"warp-agent: session {session.id} did not start in Warp within {timeout:.0f}s")
@@ -179,8 +180,9 @@ def place_tab(stem: str, panes: list[dict], title: str, group: str | None,
     warp.write_tab_config(stem, title, panes, split)
     try:
         anchor = find_anchor(group) if group and not new_window else None
+        opened_at = time.time()
         warp.open_tab_config(stem, new_window=new_window)
-        pane = wait_attached(first)
+        pane = wait_attached(first, since=opened_at)
         if group and anchor is None:
             if not warp.focus(pane["focus_url"], title):
                 raise SystemExit(f"warp-agent: could not focus the new tab to create group {group!r}")
@@ -246,15 +248,39 @@ def cmd_go(args) -> int:
     os.execv("/bin/zsh", ["/bin/zsh", str(run)])
 
 
-def cmd_attach(args) -> int:
-    session_id = os.environ["WARP_AGENT_ID"]
+def record_pane(session_id: str) -> None:
+    """Remember the Warp pane now showing the session, so `focus` and groups can find it."""
     state.write_json(state.session_dir(session_id) / "pane.json", {
         "focus_url": os.environ.get("WARP_FOCUS_URL"),
         "warp_session_uuid": os.environ.get("WARP_TERMINAL_SESSION_UUID"),
-        "shell_pid": os.getppid(),
+        "viewer_pid": os.getpid(),
         "attached_at": time.time(),
     })
-    return 0
+
+
+def cmd_start(args) -> int:
+    """Start the session's background server, then show it in this pane."""
+    session = state.Session(os.environ["WARP_AGENT_ID"])
+    record_pane(session.id)
+    try:
+        cols, rows = os.get_terminal_size(sys.stdin.fileno())
+    except OSError:
+        cols, rows = 120, 40
+    with open(session.dir / "server.log", "ab") as log:
+        # A new session (setsid) keeps the server alive when Warp closes this pane.
+        subprocess.Popen([sys.executable, str(BIN), "_serve", str(rows), str(cols)],
+                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    return 0 if ptywrap.view(session.dir / "sock") in (0, 2) else 1
+
+
+def cmd_view(args) -> int:
+    """Show a running session in this terminal (after a Warp restart, or from anywhere)."""
+    session = state.resolve(args.id)
+    if not session.alive():
+        raise SystemExit(f"warp-agent: {session.id} is not running")
+    record_pane(session.id)
+    code = ptywrap.view(session.dir / "sock", connect_timeout=3)
+    return 0 if code in (0, 2) else 1
 
 
 class TrustPromptWatcher:
@@ -301,22 +327,64 @@ class TrustPromptWatcher:
         return self.accept(self.buffer)
 
 
-def cmd_wrap(args) -> int:
+def cmd_serve(args) -> int:
+    """The background server: owns the agent's terminal for the session's whole life."""
     session = state.Session(os.environ["WARP_AGENT_ID"])
+    proc = {"wrapper_pid": os.getpid(), "viewer": False}
+
+    def save():
+        state.write_json(session.dir / "proc.json", proc)
 
     def on_start(child_pid):
-        state.write_json(session.dir / "proc.json", {"wrapper_pid": os.getpid(),
-                                                     "child_pid": child_pid,
-                                                     "started_at": time.time()})
+        proc.update(child_pid=child_pid, started_at=time.time())
+        save()
+
+    def on_viewer(connected):
+        proc["viewer"] = connected
+        save()
 
     def on_exit(code):
-        proc = session.proc
-        proc.update(exit_code=code, ended_at=time.time())
-        state.write_json(session.dir / "proc.json", proc)
+        proc.update(exit_code=code, ended_at=time.time(), viewer=False)
+        save()
         state.update_status(session.id, state="exited", detail=f"exit code {code}")
 
-    return ptywrap.run(agent_argv(session), session.dir / "inbox", session.dir / "output.log",
-                       on_start=on_start, on_exit=on_exit, on_output=TrustPromptWatcher(session))
+    save()
+    return ptywrap.serve(agent_argv(session), session.dir / "inbox", session.dir / "output.log",
+                         session.dir / "sock", on_start=on_start, on_exit=on_exit,
+                         on_output=TrustPromptWatcher(session), on_viewer=on_viewer,
+                         winsize=(args.rows, args.cols))
+
+
+def cmd_restore(args) -> int:
+    """Show every running session that no Warp pane is showing (after Warp restarts).
+
+    A session goes back into the pane it last used when Warp restored that pane;
+    otherwise it opens in a new tab in its group.
+    """
+    detached = [s for s in state.Session.all() if s.alive() and not s.proc.get("viewer")]
+    if not detached:
+        print("every running session is already shown in Warp")
+        return 0
+    for session in detached:
+        meta = session.meta
+        started = time.time()
+        url = session.pane.get("focus_url")
+        command = f"exec {'warp-agent' if shutil.which('warp-agent') else BIN} view {session.id}"
+        reused = False
+        if url and warp.focus(url, meta["tab_title"], timeout=1.5):
+            try:
+                warp.send_keys([("text", command), ("code", warp.RETURN)], meta["tab_title"])
+                wait_attached(session, timeout=5, since=started)
+                reused = True
+            except (warp.WarpError, SystemExit):
+                reused = False
+        if not reused:
+            place_tab(warp.TAB_CONFIG_PREFIX + session.id + "-view",
+                      [{"directory": meta["dir"], "command": f"exec {BIN} view {session.id}"}],
+                      meta["tab_title"], meta.get("group"), False, session)
+        print(f"{session.id}: {'restored pane' if reused else 'new tab'}"
+              + (f" in {meta['group']}" if meta.get("group") else ""))
+    return 0
 
 
 def cmd_hook(args) -> int:
@@ -444,6 +512,7 @@ def cmd_ls(args) -> int:
         rows.append({
             "id": session.id, "agent": meta.get("agent"), "group": meta.get("group") or "",
             "state": status.get("state") if alive or status.get("state") == "exited" else "gone",
+            "shown": bool(session.proc.get("viewer")) if alive else None,
             "detail": status.get("detail") or "",
             "updated": _age(now - status.get("updated_at", now)), "dir": meta.get("dir"),
         })
@@ -452,7 +521,8 @@ def cmd_ls(args) -> int:
         return 0
     home = str(Path.home())
     for row in rows:
-        print(f"{row['id']:<28} {row['agent']:<6} {row['group'][:14]:<14} {row['state']:<8} "
+        hidden = " (no pane)" if row["shown"] is False else ""
+        print(f"{row['id']:<28} {row['agent']:<6} {row['group'][:14]:<14} {row['state'] + hidden:<18} "
               f"{row['updated']:>4}  {row['dir'].replace(home, '~')}  {row['detail'][:60]}")
     return 0
 
@@ -574,8 +644,18 @@ def build_parser() -> argparse.ArgumentParser:
     go = sub.add_parser("go", help="start a prepared session in this pane (used by launches)")
     go.add_argument("id")
     go.set_defaults(func=cmd_go)
-    sub.add_parser("_attach").set_defaults(func=cmd_attach)
-    sub.add_parser("_wrap").set_defaults(func=cmd_wrap)
+    view = sub.add_parser("view", help="show a running session in this terminal")
+    view.add_argument("id")
+    view.set_defaults(func=cmd_view)
+
+    restore = sub.add_parser("restore", help="show running sessions again after Warp restarts")
+    restore.set_defaults(func=cmd_restore)
+
+    sub.add_parser("_start").set_defaults(func=cmd_start)
+    serve = sub.add_parser("_serve")
+    serve.add_argument("rows", type=int)
+    serve.add_argument("cols", type=int)
+    serve.set_defaults(func=cmd_serve)
     return parser
 
 
