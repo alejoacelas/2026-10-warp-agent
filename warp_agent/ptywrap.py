@@ -67,8 +67,12 @@ class Log:
 
 
 def run(argv: list[str], inbox: Path, log_path: Path, on_start=None, on_exit=None,
-        winsize: tuple[int, int] | None = None) -> int:
-    """Run argv under a PTY until it exits; return its exit code."""
+        on_output=None, winsize: tuple[int, int] | None = None) -> int:
+    """Run argv under a PTY until it exits; return its exit code.
+
+    `on_output(data)` sees each chunk the agent prints and may return a list of
+    key names to type in reply (used to answer known startup prompts).
+    """
     if inbox.exists():
         inbox.unlink()
     os.mkfifo(inbox, 0o600)
@@ -135,6 +139,9 @@ def run(argv: list[str], inbox: Path, log_path: Path, on_start=None, on_exit=Non
                     bracketed = False
                 os.write(stdout_fd, data)
                 log.write(data)
+                if on_output:
+                    for offset, key in enumerate(on_output(data) or []):
+                        pending.append((time.monotonic() + 0.3 + 0.2 * offset, KEYS.get(key, key.encode())))
 
             if interactive and stdin_fd in ready:
                 data = os.read(stdin_fd, 65536)

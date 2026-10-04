@@ -72,7 +72,7 @@ def _summarize_tool(payload: dict) -> str:
 def transition(event: str, payload: dict) -> dict | None:
     """Map one hook event to status fields, or None to leave status unchanged."""
     if event == "SessionStart":
-        return {"session_id": payload.get("session_id"),
+        return {"agent_session_id": payload.get("session_id"),
                 "transcript_path": payload.get("transcript_path"),
                 "state": "idle", "detail": payload.get("source")}
     if event == "UserPromptSubmit":

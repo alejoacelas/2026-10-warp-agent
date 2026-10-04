@@ -212,11 +212,14 @@ def warp_windows() -> list[dict]:
     return json.loads(out.stdout)
 
 
-def screenshot(window_title: str, path: Path) -> Path:
+def screenshot(window_title: str, path: Path) -> float:
+    """Capture one Warp window; return the pixels-per-point scale of the image."""
     for window in warp_windows():
         if window["title"] == window_title:
             subprocess.run(["screencapture", "-x", "-o", "-l", str(window["id"]), str(path)], check=True)
-            return path
+            with open(path, "rb") as handle:
+                pixel_width = int.from_bytes(handle.read(24)[16:20], "big")  # PNG IHDR width
+            return pixel_width / window["width"] if window.get("width") else 1.0
     raise WarpError(f"no Warp window titled {window_title!r}")
 
 
@@ -233,14 +236,15 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def sidebar_groups(lines: list[dict], sidebar_width: int = 560) -> dict[str, list[str]]:
+def sidebar_groups(lines: list[dict], scale: float = 1.0) -> dict[str, list[str]]:
     """Read tab groups from the vertical tabs sidebar of a screenshot.
 
     A group header is a line followed by an "N tab(s)" line. Its members are the
     rows below it that are indented further than the header, until a row at or
-    left of the header's indent. Works on Retina screenshots (2x coordinates).
+    left of the header's indent. The sidebar's rows start within its first 200
+    points; terminal text starts past the default 248-point sidebar width.
     """
-    rows = sorted((l for l in lines if l["x"] < sidebar_width), key=lambda l: l["y"])
+    rows = sorted((l for l in lines if l["x"] < 200 * scale), key=lambda l: l["y"])
     groups: dict[str, list[str]] = {}
     current = None
     header_x = 0
@@ -254,7 +258,7 @@ def sidebar_groups(lines: list[dict], sidebar_width: int = 560) -> dict[str, lis
         if re.fullmatch(r"\d+ tabs?", normalize(row["text"])):
             continue
         if current is not None:
-            if row["x"] > header_x + 12:
+            if row["x"] > header_x + 6 * scale:
                 groups[current].append(normalize(row["text"]))
             else:
                 current = None

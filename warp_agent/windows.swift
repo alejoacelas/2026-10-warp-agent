@@ -12,6 +12,7 @@ for window in all {
         "id": window[kCGWindowNumber as String] as? Int ?? 0,
         "title": title,
         "onscreen": window[kCGWindowIsOnscreen as String] as? Bool ?? false,
+        "width": (window[kCGWindowBounds as String] as? [String: Any])?["Width"] as? Double ?? 0,
     ])
 }
 print(String(data: try JSONSerialization.data(withJSONObject: windows), encoding: .utf8)!)

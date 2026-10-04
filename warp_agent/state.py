@@ -72,7 +72,7 @@ def locked(path: Path):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def update_status(session_id: str, **fields) -> dict:
+def update_status(session_id: str, /, **fields) -> dict:
     """Merge fields into status.json; a changed `state` bumps `seq`."""
     directory = session_dir(session_id)
     with locked(directory / "status.lock"):

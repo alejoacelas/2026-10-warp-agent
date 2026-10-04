@@ -55,9 +55,9 @@ def _fork_source(args) -> dict | None:
         raise SystemExit(f"warp-agent: cannot fork a {meta['agent']} session with {args.agent}")
     if args.agent == "claude":
         return {"claude_session_id": meta["claude_session_id"], "session": source.id}
-    if not status.get("session_id"):
+    if not status.get("agent_session_id"):
         raise SystemExit("warp-agent: that Codex session has not reported its ID yet")
-    return {"codex_session_id": status["session_id"], "session": source.id}
+    return {"codex_session_id": status["agent_session_id"], "session": source.id}
 
 
 def create_session(args, prompt: str, group: str | None, tab_title: str | None = None) -> state.Session:
@@ -118,7 +118,8 @@ def agent_argv(session: state.Session) -> list[str]:
             argv += ["fork", fork["codex_session_id"]]
         elif fork.get("codex_last"):
             argv += ["fork", "--last"]
-        argv += hooks.codex_overrides() + ["--dangerously-bypass-hook-trust"]
+        argv += hooks.codex_overrides() + ["--dangerously-bypass-hook-trust",
+                                           "-c", f"projects.{json.dumps(meta['dir'])}.trust_level=\"trusted\""]
         argv += ["--dangerously-bypass-approvals-and-sandbox"] if bypass else ["-a", "untrusted"]
         if meta.get("model"):
             argv += ["-m", meta["model"]]
@@ -232,6 +233,37 @@ def cmd_attach(args) -> int:
     return 0
 
 
+class TrustPromptWatcher:
+    """Answer Claude Code's folder-trust prompt for the directory the user chose.
+
+    The prompt appears before any hook runs, so nothing else would report it.
+    Terminal output draws spaces with cursor moves, so matching ignores whitespace.
+    With --ask-permissions the prompt is left for a person and reported as waiting.
+    """
+
+    YES = "Yes,Itrustthisfolder"
+
+    def __init__(self, session: state.Session):
+        self.session = session
+        self.auto = session.meta.get("permissions") == "bypass" and session.meta.get("agent") == "claude"
+        self.buffer = ""
+        self.done = False
+
+    def __call__(self, data: bytes):
+        if self.done:
+            return None
+        text = transcripts.ANSI.sub(b"", data).decode("utf-8", "replace")
+        self.buffer = (self.buffer + "".join(text.split()))[-4000:]
+        if self.YES not in self.buffer:
+            return None
+        self.done = True
+        if not self.auto:
+            state.update_status(self.session.id, state="waiting", detail="folder trust prompt")
+            return None
+        on_no = self.buffer.rfind("❯No,exit") > self.buffer.rfind("❯" + self.YES)
+        return ["down", "enter"] if on_no else ["enter"]
+
+
 def cmd_wrap(args) -> int:
     session = state.Session(os.environ["WARP_AGENT_ID"])
 
@@ -247,7 +279,7 @@ def cmd_wrap(args) -> int:
         state.update_status(session.id, state="exited", detail=f"exit code {code}")
 
     return ptywrap.run(agent_argv(session), session.dir / "inbox", session.dir / "output.log",
-                       on_start=on_start, on_exit=on_exit)
+                       on_start=on_start, on_exit=on_exit, on_output=TrustPromptWatcher(session))
 
 
 def cmd_hook(args) -> int:
@@ -389,8 +421,8 @@ def cmd_shot(args) -> int:
     """Screenshot the Warp window showing a session and report the sidebar's groups."""
     session = state.resolve(args.id)
     out = Path(args.out or session.dir / "screenshot.png")
-    warp.screenshot(session.meta["tab_title"], out) if not args.window else warp.screenshot(args.window, out)
-    groups = warp.sidebar_groups(warp.recognize_text(out))
+    scale = warp.screenshot(args.window or session.meta["tab_title"], out)
+    groups = warp.sidebar_groups(warp.recognize_text(out), scale)
     print(json.dumps({"screenshot": str(out), "groups": groups}, indent=2))
     return 0
 
