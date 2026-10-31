@@ -6,7 +6,7 @@ supervising them from a script or another agent.
 
 The deliverables are the `warp-agent` CLI (Python 3.13, standard library only,
 linked into `~/.local/bin`) and the Warp track of the `supervise-workers` skill in
-`~/best/dotfiles/skills/supervise-workers/`, which keeps its Orca track. The skill
+`~/best/stash/dotfiles/skills/supervise-workers/`, which keeps its Orca track. The skill
 picks the track from the environment: `TERM_PROGRAM=WarpTerminal` means Warp,
 `ORCA_TERMINAL_HANDLE` means Orca.
 
@@ -47,7 +47,7 @@ Source references are to `reference/warp`.
 - Each pane's shell has `WARP_FOCUS_URL`; the front window's title is its active
   tab's title, so `focus` confirms success by comparing titles.
 - Creating a group: the ctrl-alt-cmd-g chord bound in `~/.warp/keybindings.yaml`
-  (linked from `~/best/dotfiles/warp/`), which Warp loads only at startup; until
+  (linked from `~/best/stash/dotfiles/warp/`), which Warp loads only at startup; until
   then the command palette (Cmd+P, "Create tab group from active"). Either opens
   the new group's name for editing (`view.rs:7635`). Splitting: Cmd+D, then 1.0 s
   before typing; 0.3 s lost the typed command in live tests.
