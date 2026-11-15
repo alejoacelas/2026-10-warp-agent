@@ -83,6 +83,14 @@ class PtyWrapperTest(unittest.TestCase):
         self.assertEqual("".join(c[1] for c in chunks), "1\x1b[B\r")
         self.assertEqual(code, 7)
 
+    def test_message_larger_than_the_pipe_buffer_arrives_whole(self):
+        # macOS pipes hold 16 KB at first and Linux pipes 64 KB; a single
+        # non-blocking write used to drop the rest of the line silently.
+        text = "".join(f"line {i:06d}\n" for i in range(8000))
+        chunks, _, code, _ = self.run_session(False, {"text": text, "enter": True})
+        self.assertEqual("".join(c[1] for c in chunks), text + "\r")
+        self.assertEqual(code, 7)
+
     def test_send_fails_when_no_wrapper_listens(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(RuntimeError):

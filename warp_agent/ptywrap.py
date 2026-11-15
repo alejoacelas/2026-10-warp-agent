@@ -64,6 +64,8 @@ ENTER_DELAY = 0.4
 LOG_LIMIT = 8 * 1024 * 1024
 LOG_KEEP = 2 * 1024 * 1024
 FIRST_VIEWER_TIMEOUT = 15.0
+# How long `send` waits for the server to make room in its inbox pipe.
+SEND_TIMEOUT = 10.0
 # How long after a hang-up to wait before deciding Warp did not quit.
 CLOSE_GRACE = float(os.environ.get("WARP_AGENT_CLOSE_GRACE", "5"))
 WARP_APP = "/Warp.app/Contents/MacOS/stable"
@@ -515,7 +517,20 @@ def send(inbox: Path, message: dict) -> None:
         fd = os.open(inbox, os.O_WRONLY | os.O_NONBLOCK)
     except (FileNotFoundError, OSError) as exc:
         raise RuntimeError("the agent is not running (no session server listening)") from exc
+    # The pipe holds 16 KB on macOS (64 KB on Linux), so a longer line takes several
+    # writes while the server reads; stopping partway would leave half a line that
+    # also swallows the next message.
+    data = (json.dumps(message) + "\n").encode()
+    deadline = time.monotonic() + SEND_TIMEOUT
     try:
-        os.write(fd, (json.dumps(message) + "\n").encode())
+        while data:
+            try:
+                data = data[os.write(fd, data):]
+            except BlockingIOError:
+                if not select.select([], [fd], [], max(0.0, deadline - time.monotonic()))[1]:
+                    raise RuntimeError(f"the session server stopped reading its inbox; "
+                                       f"{len(data)} bytes were not delivered") from None
+            except BrokenPipeError as exc:
+                raise RuntimeError("the session server closed its inbox before the message was delivered") from exc
     finally:
         os.close(fd)
