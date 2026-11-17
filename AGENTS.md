@@ -1,5 +1,6 @@
 # warp-agent
 
+Tags: agents, terminal
 Explores replicating Orca's agent workflow inside the Warp terminal: opening Claude
 Code and Codex sessions inside chosen Warp tab groups and split panes, and
 supervising them from a script or another agent.
