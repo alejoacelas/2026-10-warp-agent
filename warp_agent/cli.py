@@ -698,7 +698,7 @@ def _launch_options(parser):
     parser.add_argument("--window", action="store_true", help="open in a new Warp window")
     parser.add_argument("--model", help="model override (default: the agent's default)")
     parser.add_argument("--agent-args", metavar="ARGS",
-                        help='extra flags for the agent, e.g. "--profile cli -c model_reasoning_effort=high"')
+                        help='extra flags for the agent, e.g. "-c model_reasoning_effort=high"')
     parser.add_argument("--ask-permissions", action="store_true",
                         help="let the agent ask before acting (default: bypass approvals)")
     parser.add_argument("--keep-pane", action="store_true",
